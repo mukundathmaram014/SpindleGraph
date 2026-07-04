@@ -1,5 +1,6 @@
 import { useEffect, useState } from 'react'
 import { api, type Executor, type Project, type Spec } from '../api'
+import RiskChip from './RiskChip'
 
 export default function SpecDrawer({ spec, project, executors, onClose, refresh }: {
   spec: Spec
@@ -65,6 +66,7 @@ export default function SpecDrawer({ spec, project, executors, onClose, refresh 
             #{String(spec.number).padStart(4, '0')} · {spec.file_path}
           </span>
           <span className={`pill ${spec.status}`}>{spec.status}</span>
+          <RiskChip risk={spec.risk} />
           <div className="grow" />
           <button onClick={onClose}>Close</button>
         </div>

@@ -1,0 +1,2 @@
+[console_scripts]
+spindlegraph = spindlegraph.cli:main

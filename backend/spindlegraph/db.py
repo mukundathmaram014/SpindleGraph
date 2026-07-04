@@ -36,6 +36,7 @@ CREATE TABLE IF NOT EXISTS executor (
   input_price_per_mtok  REAL,
   output_price_per_mtok REAL,
   avg_build_cost_usd REAL,
+  command_template TEXT,
   enabled       INTEGER NOT NULL DEFAULT 1
 );
 
@@ -52,6 +53,7 @@ CREATE TABLE IF NOT EXISTS spec (
   files_planned_json TEXT NOT NULL DEFAULT '[]',
   files_actual_json  TEXT NOT NULL DEFAULT '[]',
   decisions_json     TEXT NOT NULL DEFAULT '[]',
+  risk_json          TEXT NOT NULL DEFAULT '{}',
   depends_on_json    TEXT NOT NULL DEFAULT '[]',
   executor_id   INTEGER REFERENCES executor(id),
   provenance_json    TEXT NOT NULL DEFAULT '{}',
@@ -128,10 +130,21 @@ def connect(path: Path | None = None) -> sqlite3.Connection:
     return conn
 
 
+# additive migrations for DBs created before these columns existed
+MIGRATIONS = [
+    ("spec", "risk_json", "TEXT NOT NULL DEFAULT '{}'"),
+    ("executor", "command_template", "TEXT"),
+]
+
+
 def init_db(path: Path | None = None) -> None:
     conn = connect(path)
     try:
         conn.executescript(SCHEMA)
+        for table, column, decl in MIGRATIONS:
+            cols = {r[1] for r in conn.execute(f"PRAGMA table_info({table})")}
+            if column not in cols:
+                conn.execute(f"ALTER TABLE {table} ADD COLUMN {column} {decl}")
         if conn.execute("SELECT COUNT(*) FROM executor").fetchone()[0] == 0:
             conn.executemany(
                 "INSERT INTO executor (name, backend, model, prior_success,"
@@ -156,5 +169,5 @@ def row_to_dict(row: sqlite3.Row, json_fields: tuple[str, ...] = ()) -> dict:
 
 
 SPEC_JSON = ("files_planned_json", "files_actual_json", "decisions_json",
-             "depends_on_json", "provenance_json")
+             "risk_json", "depends_on_json", "provenance_json")
 JOB_JSON = ("spec_ids_json", "usage_json")

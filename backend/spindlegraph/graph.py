@@ -11,6 +11,19 @@ import sqlite3
 from itertools import combinations
 
 
+_INVOLVEMENT_RANK = {"minimal": 0, "moderate": 1, "involved": 2}
+_REVIEW_RANK = {"low": 0, "medium": 1, "high": 2}
+
+
+def risk_score(spec: dict) -> int:
+    """0–4 from the spec's Risk axes (Involvement + Review attention).
+    Missing/unparsed risk scores 0 — ordering then falls back to the old
+    degree/number heuristics."""
+    r = spec.get("risk") or {}
+    return (_INVOLVEMENT_RANK.get(str(r.get("involvement", "")).lower(), 0)
+            + _REVIEW_RANK.get(str(r.get("review", "")).lower(), 0))
+
+
 def effective_files(spec: dict) -> set[str]:
     """files_actual once built, else files_planned."""
     key = "files_actual" if spec.get("status") == "built" and spec.get("files_actual") \
@@ -110,7 +123,11 @@ def check_selection(specs: list[dict], edges: list[dict],
 def suggest_waves(specs: list[dict], edges: list[dict],
                   selection_ids: list[int]) -> list[list[int]]:
     """Greedy repeated maximal-independent-set over the conflict subgraph,
-    respecting depends_on. Heuristic, not optimal — fine at < 50 specs."""
+    respecting depends_on. Heuristic, not optimal — fine at < 50 specs.
+
+    Risk drives ordering: high-risk specs (Involved / High review attention)
+    are scheduled *earliest* — their failures cascade into skipped conflicting
+    neighbors, and the author's supervision is freshest at batch start."""
     selection = set(selection_ids)
     by_id = {s["id"]: s for s in specs}
     adj = _conflict_map(specs, edges, selection)
@@ -131,17 +148,20 @@ def suggest_waves(specs: list[dict], edges: list[dict],
         eligible = [i for i in remaining if deps[i] <= done]
         if not eligible:  # dependency cycle — break it, sequential by number
             eligible = sorted(remaining, key=lambda i: by_id[i]["number"])[:1]
-        # low conflict degree first, then low total conflict weight, then number
+        # riskiest first (they must land early), then low conflict degree,
+        # then low total conflict weight, then spec number
         def key(i: int):
             nbrs = adj[i] & set(eligible)
-            return (len(nbrs),
+            return (-risk_score(by_id[i]),
+                    len(nbrs),
                     sum(weight_of.get((i, n), 1.0) for n in nbrs),
                     by_id[i]["number"])
         wave: list[int] = []
         for i in sorted(eligible, key=key):
             if not (adj[i] & set(wave)):
                 wave.append(i)
-        wave.sort(key=lambda i: by_id[i]["number"])
+        # within a wave, list (and review) riskiest first
+        wave.sort(key=lambda i: (-risk_score(by_id[i]), by_id[i]["number"]))
         waves.append(wave)
         done |= set(wave)
         remaining -= set(wave)

@@ -1,0 +1,13 @@
+Metadata-Version: 2.4
+Name: spindlegraph
+Version: 0.2.0
+Summary: Local GUI control plane that orchestrates coding agents to build software from specs
+Requires-Python: >=3.11
+Requires-Dist: fastapi>=0.115
+Requires-Dist: uvicorn[standard]>=0.30
+Requires-Dist: pyyaml>=6.0
+Provides-Extra: sdk
+Requires-Dist: claude-agent-sdk>=0.1.0; extra == "sdk"
+Provides-Extra: dev
+Requires-Dist: pytest>=8.0; extra == "dev"
+Requires-Dist: httpx>=0.27; extra == "dev"

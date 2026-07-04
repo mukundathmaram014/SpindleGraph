@@ -5,6 +5,7 @@ import {
   type GraphNode, type Project, type Spec,
 } from '../api'
 import FloatingEdge from './FloatingEdge'
+import RiskChip from './RiskChip'
 import { forceLayout } from './layout'
 
 const edgeTypes = { floating: FloatingEdge }
@@ -87,6 +88,7 @@ export default function GraphView({ project, executors, specs, graphTick, refres
               <span className={`pill ${n.status}`}>{n.status}</span>{' '}
               {n.unknown_footprint ? '⚠ unknown footprint' : `${n.file_count} files`}
               {n.unresolved_decisions > 0 && ` · ${n.unresolved_decisions}❓`}
+              {' '}<RiskChip risk={n.risk} compact />
             </div>
             <div className="sub">
               {ex ? `${ex.name} · P ${ex.estimated_success.toFixed(2)} · ${fmt$(ex.avg_build_cost_usd)}`
@@ -318,7 +320,10 @@ function WaveRows({ wave, wi, byId, specById, executors, refreshSpecs, pOf }: {
           ?? executors.find((e) => e.enabled)
         return (
           <tr key={id}>
-            <td className="mono">#{n ? String(n.number).padStart(4, '0') : id}</td>
+            <td className="mono">
+              #{n ? String(n.number).padStart(4, '0') : id}{' '}
+              <RiskChip risk={s?.risk} compact />
+            </td>
             <td>
               <select value={s?.executor_id ?? ''} style={{ maxWidth: 130 }}
                 onChange={async (e) => {

@@ -14,7 +14,11 @@ from . import db as dbm
 from .api.routes import router
 from .events import bus
 
-FRONTEND_DIST = Path(__file__).resolve().parents[2] / "frontend" / "dist"
+# repo clone: frontend/dist; installed package: bundled spindlegraph/static
+FRONTEND_DIST = next(
+    (p for p in (Path(__file__).resolve().parents[2] / "frontend" / "dist",
+                 Path(__file__).resolve().parent / "static")
+     if p.is_dir()), None)
 
 
 @asynccontextmanager
@@ -47,5 +51,5 @@ async def project_ws(ws: WebSocket, project_id: int):
         bus.unsubscribe(project_id, q)
 
 
-if FRONTEND_DIST.is_dir():
+if FRONTEND_DIST is not None:
     app.mount("/", StaticFiles(directory=str(FRONTEND_DIST), html=True), name="ui")

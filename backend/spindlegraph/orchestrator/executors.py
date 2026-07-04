@@ -1,17 +1,36 @@
-"""Executor -> subprocess argv. v0 ships exactly one backend, claude_code;
-the interface exists so other backends (codex_cli, local_oss) plug in later
-without touching the runner."""
+"""Executor backends (SPEC §7, v2).
+
+- ``claude_code``  — the claude CLI as a subprocess, stream-json events.
+- ``local_cli``    — any local coding agent invocable as a command line
+  (aider, a codex wrapper, an ollama harness, …): the executor's
+  ``command_template`` runs with ``{prompt}`` substituted; plain-text output
+  streams as raw log events; exit 0 = success.
+- ``claude_sdk``   — the Claude Agent SDK, in-process (see jobs._exec_sdk).
+"""
 from __future__ import annotations
 
 import shlex
 import shutil
 
+BACKENDS = ("claude_code", "local_cli", "claude_sdk")
+
 
 def build_argv(executor: dict | None, prompt: str, cfg: dict,
                escalate: bool = False) -> list[str]:
     backend = (executor or {}).get("backend", "claude_code")
+    if backend == "local_cli":
+        template = (executor or {}).get("command_template") or ""
+        if "{prompt}" not in template:
+            raise ValueError(
+                "local_cli executor needs a command_template containing {prompt}")
+        argv = [p.strip('"').replace("{prompt}", prompt)
+                for p in shlex.split(template, posix=False)]
+        resolved = shutil.which(argv[0])
+        if resolved:
+            argv[0] = resolved
+        return argv
     if backend != "claude_code":
-        raise ValueError(f"backend '{backend}' is not supported in v0")
+        raise ValueError(f"backend '{backend}' has no subprocess argv")
     # claude_bin may carry args (tests use "python fake_claude.py")
     bin_parts = shlex.split(str(cfg.get("claude_bin", "claude")), posix=False)
     bin_parts = [p.strip('"') for p in bin_parts]
@@ -27,6 +46,15 @@ def build_argv(executor: dict | None, prompt: str, cfg: dict,
     if model:
         argv += ["--model", model]
     return argv
+
+
+def describe_command(executor: dict | None, prompt: str, cfg: dict,
+                     escalate: bool = False) -> str:
+    """Audit string for the job row (claude_sdk has no argv)."""
+    import subprocess
+    if (executor or {}).get("backend") == "claude_sdk":
+        return f"[claude-agent-sdk] {prompt}"
+    return subprocess.list2cmdline(build_argv(executor, prompt, cfg, escalate))
 
 
 def estimated_success(executor: dict) -> float:

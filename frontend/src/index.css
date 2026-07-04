@@ -116,6 +116,14 @@ h2.section { font-size: 11.5px; letter-spacing: .1em; text-transform: uppercase;
   display: inline-block; width: 10px; height: 10px; border-radius: 3px;
   margin-right: 5px; vertical-align: middle;
 }
+.riskchip {
+  display: inline-block; font-size: 10.5px; font-weight: 700; line-height: 1.6;
+  border-radius: 99px; padding: 0 7px; background: var(--chip); color: var(--muted);
+  cursor: help;
+}
+.riskchip.high { color: var(--bad); }
+.riskchip.medium { color: var(--warn); }
+.riskchip.low { color: var(--good); }
 .sgnode .t { font-weight: 700; }
 .sgnode .sub { color: var(--muted); font-size: 10.5px; margin-top: 2px; }
 .sgnode.sel { border-color: var(--accent); box-shadow: 0 0 0 3px color-mix(in srgb, var(--accent) 25%, transparent); }

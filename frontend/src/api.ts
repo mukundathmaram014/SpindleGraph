@@ -5,16 +5,21 @@ export interface Project {
 }
 export interface FileRef { path: string; rationale: string; planned_new: boolean; from_glob: string | null }
 export interface Decision { text: string; resolved: boolean; answer: string }
+export interface Risk {
+  involvement?: string; involvement_note?: string;
+  review?: string; review_note?: string;
+}
 export interface Spec {
   id: number; project_id: number; number: number; slug: string; title: string;
   status: string; file_path: string; body_md: string;
   files_planned: FileRef[]; files_actual: { path: string }[];
-  decisions: Decision[]; depends_on: number[]; executor_id: number | null;
+  decisions: Decision[]; risk: Risk; depends_on: number[]; executor_id: number | null;
   provenance: { branch?: string; pr_url?: string; built_at?: string };
 }
 export interface Executor {
   id: number; name: string; backend: string; model: string | null;
   prior_success: number; prior_strength: number; successes: number; failures: number;
+  command_template: string | null;
   input_price_per_mtok: number | null; output_price_per_mtok: number | null;
   avg_build_cost_usd: number | null; enabled: number; estimated_success: number;
 }
@@ -31,7 +36,7 @@ export type LogEvent = Record<string, any>
 export interface GraphNode {
   id: number; number: number; slug: string; title: string; status: string;
   executor_id: number | null; file_count: number; unknown_footprint: boolean;
-  unresolved_decisions: number; pr_url: string | null;
+  unresolved_decisions: number; pr_url: string | null; risk: Risk;
 }
 export interface GraphEdge {
   spec_a: number; spec_b: number; shared_files: string[]; weight: number; overridden: number;
@@ -90,6 +95,7 @@ export const api = {
   job: (id: number) => req<Job>('GET', `/api/jobs/${id}`),
   createJob: (body: Record<string, any>) => req<Job>('POST', '/api/jobs', body),
   cancelJob: (id: number) => req('POST', `/api/jobs/${id}/cancel`),
+  deleteProject: (id: number) => req('DELETE', `/api/projects/${id}`),
   proposals: (pid: number) =>
     req<Proposal[]>('GET', `/api/projects/${pid}/proposals`),
   acceptProposal: (id: number) => req<Spec>('POST', `/api/proposals/${id}/accept`),

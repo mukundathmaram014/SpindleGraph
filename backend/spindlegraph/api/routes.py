@@ -173,6 +173,22 @@ def patch_project(project_id: int, body: ProjectPatch):
         conn.close()
 
 
+@router.delete("/projects/{project_id}")
+def delete_project(project_id: int):
+    """Remove a project's records from SpindleGraph. Never touches the target
+    repo itself (specs, branches, and commands stay put)."""
+    conn = _conn()
+    try:
+        _get_project(conn, project_id)
+        for tbl in ("reconcile_proposal", "edge", "job", "spec"):
+            conn.execute(f"DELETE FROM {tbl} WHERE project_id=?", (project_id,))
+        conn.execute("DELETE FROM project WHERE id=?", (project_id,))
+        conn.commit()
+        return {"deleted": True}
+    finally:
+        conn.close()
+
+
 @router.post("/projects/{project_id}/import")
 def reimport(project_id: int):
     conn = _conn()
@@ -270,6 +286,7 @@ def get_graph(project_id: int):
             "unknown_footprint": not graph.effective_files(s),
             "unresolved_decisions": sum(1 for d in s["decisions"] if not d["resolved"]),
             "pr_url": (s["provenance"] or {}).get("pr_url"),
+            "risk": s.get("risk") or {},
         } for s in specs]
         return {"nodes": nodes, "edges": edges}
     finally:
@@ -435,6 +452,7 @@ class ExecutorBody(BaseModel):
     name: str
     backend: str = "claude_code"
     model: str | None = None
+    command_template: str | None = None   # local_cli: must contain {prompt}
     prior_success: float = 0.8
     prior_strength: float = 10
     input_price_per_mtok: float | None = None
@@ -444,14 +462,18 @@ class ExecutorBody(BaseModel):
 
 @router.post("/executors")
 def create_executor(body: ExecutorBody):
+    if body.backend not in ex.BACKENDS:
+        raise HTTPException(400, f"backend must be one of {ex.BACKENDS}")
+    if body.backend == "local_cli" and "{prompt}" not in (body.command_template or ""):
+        raise HTTPException(400, "local_cli needs a command_template containing {prompt}")
     conn = _conn()
     try:
         cur = conn.execute(
-            "INSERT INTO executor (name, backend, model, prior_success, prior_strength,"
-            " input_price_per_mtok, output_price_per_mtok, enabled)"
-            " VALUES (?,?,?,?,?,?,?,?)",
-            (body.name, body.backend, body.model, body.prior_success,
-             body.prior_strength, body.input_price_per_mtok,
+            "INSERT INTO executor (name, backend, model, command_template,"
+            " prior_success, prior_strength, input_price_per_mtok,"
+            " output_price_per_mtok, enabled) VALUES (?,?,?,?,?,?,?,?,?)",
+            (body.name, body.backend, body.model, body.command_template,
+             body.prior_success, body.prior_strength, body.input_price_per_mtok,
              body.output_price_per_mtok, int(body.enabled)))
         conn.commit()
         return _executor_dict(conn.execute("SELECT * FROM executor WHERE id=?",
@@ -462,7 +484,9 @@ def create_executor(body: ExecutorBody):
 
 class ExecutorPatch(BaseModel):
     name: str | None = None
+    backend: str | None = None
     model: str | None = None
+    command_template: str | None = None
     prior_success: float | None = None
     prior_strength: float | None = None
     input_price_per_mtok: float | None = None
@@ -479,6 +503,8 @@ def patch_executor(executor_id: int, body: ExecutorPatch):
         if row is None:
             raise HTTPException(404, "executor not found")
         updates = body.model_dump(exclude_none=True)
+        if "backend" in updates and updates["backend"] not in ex.BACKENDS:
+            raise HTTPException(400, f"backend must be one of {ex.BACKENDS}")
         if "enabled" in updates:
             updates["enabled"] = int(updates["enabled"])
         if updates:

@@ -74,6 +74,13 @@ export default function Config({ project, executors, refreshExecutors, refreshPr
             </span>
           </label>
           <div className="grow" />
+          <button className="danger" onClick={async () => {
+            if (!window.confirm(
+              `Remove "${project.name}" from SpindleGraph?\n\nOnly SpindleGraph's` +
+              ' records are deleted — the repo, its specs, and branches are untouched.')) return
+            await api.deleteProject(project.id)
+            await refreshProjects()
+          }}>Remove project…</button>
           <button className="primary" onClick={async () => {
             await api.patchProject(project.id, {
               notes_doc_path: notes, default_branch: branch,
@@ -90,8 +97,9 @@ export default function Config({ project, executors, refreshExecutors, refreshPr
         <table className="executors">
           <thead>
             <tr>
-              <th>Name</th><th>Model</th><th>Prior P</th><th>$ in/MTok</th>
-              <th>$ out/MTok</th><th>Record</th><th>Live P</th><th>Avg $/build</th><th>On</th>
+              <th>Name</th><th>Backend</th><th>Model / Command</th><th>Prior P</th>
+              <th>$ in/MTok</th><th>$ out/MTok</th><th>Record</th><th>Live P</th>
+              <th>Avg $/build</th><th>On</th>
             </tr>
           </thead>
           <tbody>
@@ -100,25 +108,34 @@ export default function Config({ project, executors, refreshExecutors, refreshPr
             ))}
           </tbody>
         </table>
+        <AddExecutor refresh={refreshExecutors} />
         <p style={{ color: 'var(--muted)', fontSize: 12.5 }}>
           Live P = Beta-mean of prior + recorded build outcomes (success = checks pass +
-          PR opens). Prices are editable — they change. v0 backend is Claude Code only;
-          Codex/local executors arrive with the pluggable backend interface.
+          PR opens). Backends: <span className="mono">claude_code</span> (claude CLI),{' '}
+          <span className="mono">claude_sdk</span> (Claude Agent SDK, needs{' '}
+          <span className="mono">pip install claude-agent-sdk</span>), and{' '}
+          <span className="mono">local_cli</span> — any local coding agent runnable as
+          a command; its template runs with <span className="mono">{'{prompt}'}</span>{' '}
+          substituted, exit 0 = success.
         </p>
       </section>
     </div>
   )
 }
 
+const BACKENDS = ['claude_code', 'claude_sdk', 'local_cli'] as const
+
 function ExecutorRow({ e, refresh }: { e: Executor; refresh: () => Promise<void> }) {
   const [draft, setDraft] = useState({
-    model: e.model ?? '', prior_success: e.prior_success,
+    model: e.model ?? '', command_template: e.command_template ?? '',
+    prior_success: e.prior_success,
     input_price_per_mtok: e.input_price_per_mtok,
     output_price_per_mtok: e.output_price_per_mtok,
   })
   useEffect(() => {
     setDraft({
-      model: e.model ?? '', prior_success: e.prior_success,
+      model: e.model ?? '', command_template: e.command_template ?? '',
+      prior_success: e.prior_success,
       input_price_per_mtok: e.input_price_per_mtok,
       output_price_per_mtok: e.output_price_per_mtok,
     })
@@ -133,9 +150,21 @@ function ExecutorRow({ e, refresh }: { e: Executor; refresh: () => Promise<void>
     <tr style={{ opacity: e.enabled ? 1 : 0.5 }}>
       <td>{e.name}</td>
       <td>
-        <input className="wide mono" value={draft.model}
-          onChange={(ev) => setDraft({ ...draft, model: ev.target.value })}
-          onBlur={() => save({ model: draft.model || null })} />
+        <select value={e.backend} onChange={(ev) => save({ backend: ev.target.value })}>
+          {BACKENDS.map((b) => <option key={b} value={b}>{b}</option>)}
+        </select>
+      </td>
+      <td>
+        {e.backend === 'local_cli' ? (
+          <input className="wide mono" placeholder='myagent --msg "{prompt}"'
+            value={draft.command_template}
+            onChange={(ev) => setDraft({ ...draft, command_template: ev.target.value })}
+            onBlur={() => save({ command_template: draft.command_template })} />
+        ) : (
+          <input className="wide mono" value={draft.model}
+            onChange={(ev) => setDraft({ ...draft, model: ev.target.value })}
+            onBlur={() => save({ model: draft.model || null })} />
+        )}
       </td>
       <td>
         <input type="number" step={0.05} min={0} max={1} value={draft.prior_success}
@@ -160,5 +189,39 @@ function ExecutorRow({ e, refresh }: { e: Executor; refresh: () => Promise<void>
           onChange={(ev) => save({ enabled: ev.target.checked })} />
       </td>
     </tr>
+  )
+}
+
+function AddExecutor({ refresh }: { refresh: () => Promise<void> }) {
+  const [name, setName] = useState('')
+  const [backend, setBackend] = useState<string>('claude_code')
+  const [template, setTemplate] = useState('')
+  const [error, setError] = useState('')
+  return (
+    <div className="row" style={{ marginTop: 10 }}>
+      <input placeholder="New executor name" value={name}
+        onChange={(e) => setName(e.target.value)} />
+      <select value={backend} onChange={(e) => setBackend(e.target.value)}>
+        {BACKENDS.map((b) => <option key={b} value={b}>{b}</option>)}
+      </select>
+      {backend === 'local_cli' && (
+        <input className="grow mono" placeholder='command template, e.g. aider --yes -m "{prompt}"'
+          value={template} onChange={(e) => setTemplate(e.target.value)} />
+      )}
+      <button disabled={!name.trim()} onClick={async () => {
+        setError('')
+        try {
+          await api.addExecutor({
+            name: name.trim(), backend,
+            command_template: backend === 'local_cli' ? template : undefined,
+          })
+          setName(''); setTemplate('')
+          await refresh()
+        } catch (e) {
+          setError(e instanceof Error ? e.message : String(e))
+        }
+      }}>+ Add executor</button>
+      {error && <span style={{ color: 'var(--bad)', fontSize: 12.5 }}>{error}</span>}
+    </div>
   )
 }

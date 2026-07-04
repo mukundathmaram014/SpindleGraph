@@ -27,6 +27,9 @@ test('onboard a project from the add screen', async ({ page }) => {
 test('board shows parsed specs; drawer resolves a decision', async ({ page }) => {
   await page.goto('/')
   await expect(page.locator('.card')).toHaveCount(5)
+  // risk chip parsed from the new template's ## Risk section
+  await expect(page.locator('.card', { hasText: 'rate limiting' }).locator('.riskchip'))
+    .toHaveText(/Moderate · High review/)
   // 0012 has an unresolved decision
   await page.locator('.card', { hasText: 'Refactor settings loader' }).click()
   const drawer = page.locator('.drawer')

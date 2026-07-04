@@ -28,6 +28,10 @@ status: decided
 
 ## Decisions needed
 - [x] Algorithm? → token bucket
+
+## Risk
+- **Involvement:** Moderate — middleware + config
+- **Review attention:** High — sits in the request path of every API call
 `,
   '0009-fix-login-redirect.md': `---
 title: Fix login redirect loop

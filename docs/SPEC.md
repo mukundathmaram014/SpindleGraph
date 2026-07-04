@@ -158,6 +158,10 @@ One or two paragraphs: what and why.
 - [x] Algorithm? → token bucket
 - [ ] Counter store: redis or in-memory?
 
+## Risk
+- **Involvement:** Moderate — middleware + config, two areas
+- **Review attention:** High — sits in the request path of every API call
+
 ## Implementation notes
 Free-form guidance for the build agent.
 ```
@@ -179,6 +183,13 @@ Parsing is tolerant — hand-written specs predate SpindleGraph:
 - **Decisions needed**: checkbox list items under a heading matching
   `/^decisions? (needed|required)?$/i`. Checked = resolved; the answer is the
   text after `→` or `**Answer:**` if present.
+- **Risk** (template v2, 2026-07-04): list items under `/^risks?$/i` carrying
+  two axes — **Involvement** (Minimal | Moderate | Involved: how big/spread-out
+  the change is) and **Review attention** (Low | Medium | High: how closely
+  the author should supervise). Distinct axes: a large but well-isolated
+  change can be Involved yet Low-attention; a tiny diff to core logic can be
+  Minimal yet High. Rationale text after `—` is kept per axis. Missing/
+  unparsed risk is treated as zero.
 - Everything else is opaque body text, stored verbatim in `body_md`.
 
 ### Sync semantics
@@ -317,10 +328,14 @@ Spec records — no I/O — so it's trivially unit-testable.
 - **Parallel-safe check** (batch composer): a selected set is safe iff it
   induces no conflict edges. The API returns the offending edges otherwise.
 - **Wave suggestion:** repeatedly extract a maximal independent set from the
-  conflict subgraph of the remaining selected specs — greedy, removing the
-  highest-degree (then highest total weight) node first on conflicts — while
-  respecting `depends_on` (a spec can't be waved before its dependencies).
-  Ties broken by ascending spec number. This is a heuristic, not optimal
+  conflict subgraph of the remaining selected specs, respecting `depends_on`
+  (a spec can't be waved before its dependencies). Greedy pick order —
+  **risk first**: `risk_score` (Involvement + Review attention ranks, 0–4)
+  descending, so high-risk specs are scheduled earliest (their failures
+  cascade into skipped conflicting neighbors, and the author's supervision is
+  freshest at batch start); then lowest conflict degree, then lowest total
+  conflict weight, then ascending spec number. Within a wave, specs are
+  listed riskiest-first for review order. This is a heuristic, not optimal
   (max-independent-set is NP-hard); at realistic sizes (< 50 specs) it's fine,
   and v1's analyses can improve orderings.
 - Specs with **zero effective files** (unparsed/empty "Affected files") are
@@ -343,13 +358,19 @@ class Executor(Protocol):
     def parse_events(self, stdout_lines) -> Iterator[AgentEvent]          # normalize to one event shape
 ```
 
-- **v0 ships exactly one backend, `claude_code`** — the invocation contract
-  below. Executors differing only by `model` (Sonnet, Opus, Fable, Haiku) are
-  just rows in the executor table; the GUI seeds sensible defaults.
-- Later backends (Codex CLI, a local-model harness for e.g. quantized
-  Qwen3-Coder) implement the same interface; their auth/endpoint config lives
-  on the executor row. Nothing else in the orchestrator changes — this is why
-  the interface exists in v0 even though only one backend does.
+- **Backends (v2, shipped 2026-07-04):**
+  - `claude_code` — the claude CLI as a subprocess (invocation contract
+    below). Executors differing only by `model` are just rows; the GUI seeds
+    sensible defaults.
+  - `claude_sdk` — the Claude Agent SDK, in-process (`pip install
+    claude-agent-sdk`); events are normalized to the same stream-json shapes,
+    so logs/WS/UI are backend-agnostic.
+  - `local_cli` — any local coding agent invocable as a command line (aider,
+    a codex wrapper, an ollama harness…): the executor's `command_template`
+    runs with `{prompt}` substituted; plain-text output streams as raw log
+    events; exit 0 = success. This is the "configurable local coding agent"
+    from the v2 milestone — probabilities/cost calibrate per executor row as
+    usual, which is exactly how weak-but-free local models earn their place.
 - **Assignment:** each spec may pin an executor (`spec.executor_id`); unset
   falls back to the project's default executor. The batch composer shows and
   edits per-spec assignments before launch; the job records which executor
@@ -674,7 +695,7 @@ Precedence: job options > project settings > global config > defaults.
 
 ## 15. Milestones & acceptance criteria
 
-### v0 — data backbone + graph + run commands
+### v0 — data backbone + graph + run commands (shipped 2026-07-03)
 
 Done when this demo path works end-to-end:
 
@@ -692,7 +713,7 @@ Done when this demo path works end-to-end:
    pair; launch waves; two parallel worktree builds then the third; PR links
    listed.
 
-### v1 — reconciliation + probabilities
+### v1 — reconciliation + probabilities (shipped 2026-07-04)
 
 - Post-build reconcile: `files_actual` captured, graph re-derived, stale specs
   get agent proposals, review UI applies/rejects. Acceptance: build a spec that
@@ -704,12 +725,20 @@ Done when this demo path works end-to-end:
 - Cost display live: usage captured per job, executor pricing + avg cost
   calibrating, `P / est $ / E[$]` columns in the composer with batch totals.
 
-### v2 — local agent + polish
+### v2 — local agent + polish (shipped 2026-07-04)
 
-- Orchestrator on the Agent SDK; per-build agent/model choice incl. a local
-  coding agent configured in the GUI.
-- Multi-project UX (store is already multi-project).
-- One-command launcher (pipx/npx) or desktop shell (Tauri) — pick then.
+- ✅ Executor backends: `claude_sdk` (Claude Agent SDK, in-process) and
+  `local_cli` (any local coding agent via command template) beside
+  `claude_code`; per-spec/per-build choice in the GUI, added/edited in the
+  executor roster.
+- ✅ Multi-project UX: switcher (v0) + remove-project (records only, repo
+  untouched).
+- ✅ One-command launcher: `pip install ./backend` → `spindlegraph` (serves
+  API + bundled UI, opens browser). Desktop shell (Tauri) deliberately not
+  pursued — the launcher covers the need.
+- Spec template v2: `## Risk` section (Involvement × Review attention),
+  parsed by the importer and driving wave ordering (§6) and board/canvas/
+  composer badges.
 
 ---
 
@@ -752,6 +781,11 @@ Done when this demo path works end-to-end:
 - **D6 — Difficulty scaling.** Per-spec modifiers on P (file count, new files,
   unresolved decisions, LOC touched by conflicting built specs). Deferred past
   the first v1 cut; needs outcome data to fit against, not guesses.
+- **D8 — Risk semantics. RESOLVED 2026-07-04:** the spec template's `## Risk`
+  section (Involvement, Review attention — see §4) feeds a 0–4 `risk_score`
+  that *leads* the wave-ordering sort: riskiest specs build earliest and list
+  first within a wave. Chosen because a risky failure cascades (conflicting
+  neighbors are skipped) and author supervision is freshest at batch start.
 - **D7 — Cost awareness. RESOLVED 2026-07-03:** yes — per-executor pricing +
   token capture from the stream, estimated cost and expected-cost-to-success
   shown beside probability in the composer. See §10 → Cost display.

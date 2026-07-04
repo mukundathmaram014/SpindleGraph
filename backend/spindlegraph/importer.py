@@ -23,6 +23,11 @@ FILES_HEADING_RE = re.compile(
 DECISIONS_HEADING_RE = re.compile(
     r"^decisions?(\s+(needed|required))?\s*:?$", re.IGNORECASE
 )
+RISK_HEADING_RE = re.compile(r"^risks?(\s+assessment)?\s*:?$", re.IGNORECASE)
+INVOLVEMENT_RE = re.compile(
+    r"involvement[^a-z]*?(minimal|moderate|involved)", re.IGNORECASE)
+REVIEW_RE = re.compile(
+    r"review(\s+attention)?[^a-z]*?(low|medium|high)", re.IGNORECASE)
 LIST_ITEM_RE = re.compile(r"^\s*[-*+]\s+(.*)$")
 CHECKBOX_RE = re.compile(r"^\s*[-*+]\s+\[( |x|X)\]\s+(.*)$")
 CODE_SPAN_RE = re.compile(r"`([^`]+)`")
@@ -101,7 +106,8 @@ def parse_spec_file(path: Path, repo_root: Path) -> dict | None:
 
     files: list[dict] = []
     decisions: list[dict] = []
-    section = None  # None | "files" | "decisions"
+    risk: dict = {}
+    section = None  # None | "files" | "decisions" | "risk"
     for line in lines:
         h = HEADING_RE.match(line)
         if h:
@@ -112,6 +118,8 @@ def parse_spec_file(path: Path, repo_root: Path) -> dict | None:
                 section = "files"
             elif DECISIONS_HEADING_RE.match(heading):
                 section = "decisions"
+            elif RISK_HEADING_RE.match(heading):
+                section = "risk"
             else:
                 section = None
             continue
@@ -135,6 +143,25 @@ def parse_spec_file(path: Path, repo_root: Path) -> dict | None:
                 planned_new = not (repo_root / raw_path).exists()
                 files.append({"path": raw_path, "rationale": rationale,
                               "planned_new": planned_new, "from_glob": None})
+        elif section == "risk":
+            li = LIST_ITEM_RE.match(line)
+            if li:
+                item = li.group(1).strip()
+                note = ""
+                nm = re.search(r"(?:—|--)\s*(.*)$", item)
+                if nm:
+                    note = nm.group(1).strip()
+                im = INVOLVEMENT_RE.search(item)
+                if im:
+                    risk["involvement"] = im.group(1).lower()
+                    if note:
+                        risk["involvement_note"] = note
+                    continue
+                rm2 = REVIEW_RE.search(item)
+                if rm2:
+                    risk["review"] = rm2.group(2).lower()
+                    if note:
+                        risk["review_note"] = note
         elif section == "decisions":
             cb = CHECKBOX_RE.match(line)
             if cb:
@@ -168,6 +195,7 @@ def parse_spec_file(path: Path, repo_root: Path) -> dict | None:
         "body_hash": hashlib.sha256(body.encode("utf-8")).hexdigest(),
         "files_planned": files,
         "decisions": decisions,
+        "risk": risk,
     }
 
 
@@ -217,6 +245,7 @@ def import_project(conn: sqlite3.Connection, project_id: int) -> dict:
             rec["slug"], rec["title"], rec["status"], rec["file_path"],
             rec["body_md"], rec["body_hash"],
             json.dumps(rec["files_planned"]), json.dumps(rec["decisions"]),
+            json.dumps(rec.get("risk") or {}),
             dbm.now(),
         )
         if number in existing:
@@ -229,15 +258,15 @@ def import_project(conn: sqlite3.Connection, project_id: int) -> dict:
                 args = args[:2] + (existing[number]["status"],) + args[3:]
             conn.execute(
                 "UPDATE spec SET slug=?, title=?, status=?, file_path=?, body_md=?,"
-                " body_hash=?, files_planned_json=?, decisions_json=?, updated_at=?"
-                " WHERE id=?",
+                " body_hash=?, files_planned_json=?, decisions_json=?, risk_json=?,"
+                " updated_at=? WHERE id=?",
                 args + (existing[number]["id"],),
             )
         else:
             conn.execute(
                 "INSERT INTO spec (slug, title, status, file_path, body_md, body_hash,"
-                " files_planned_json, decisions_json, updated_at, project_id, number)"
-                " VALUES (?,?,?,?,?,?,?,?,?,?,?)",
+                " files_planned_json, decisions_json, risk_json, updated_at,"
+                " project_id, number) VALUES (?,?,?,?,?,?,?,?,?,?,?,?)",
                 args + (project_id, number),
             )
         imported += 1

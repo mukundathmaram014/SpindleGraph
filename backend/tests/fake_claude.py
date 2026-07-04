@@ -69,7 +69,10 @@ def main():
         f.write_text(
             "---\ntitle: Generated idea\nstatus: draft\n---\n\n# Generated idea\n\n"
             "## Affected files\n- `src/config.py` — tweak\n\n"
-            "## Decisions needed\n- [x] scope? → minimal\n",
+            "## Decisions needed\n- [x] scope? → minimal\n\n"
+            "## Risk\n"
+            "- **Involvement:** Minimal — one config file\n"
+            "- **Review attention:** Low — no behavior change\n",
             encoding="utf-8")
         emit({"type": "result", "is_error": False, "result": f"Wrote {f}",
               "usage": {"input_tokens": 100, "output_tokens": 50},

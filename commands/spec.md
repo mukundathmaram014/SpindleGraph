@@ -32,6 +32,10 @@ You are writing a **spec**, not implementing anything. Follow this process:
    ## Decisions needed
    - [ ] <a genuinely ambiguous question the implementer cannot answer alone>
 
+   ## Risk
+   - **Involvement:** Minimal | Moderate | Involved — <short rationale>
+   - **Review attention:** Low | Medium | High — <short rationale>
+
    ## Implementation notes
    Concrete guidance for the build agent: entry points, existing patterns to
    follow, tests to add.
@@ -45,5 +49,14 @@ Rules:
 - **Decisions needed** is only for questions that genuinely change the
   implementation (algorithm choice, user-facing behavior, data migration).
   Do not pad it; an empty section is fine — but then set `status: decided`.
+- **Risk** has two axes, one bullet each, each with a short rationale:
+  **Involvement** (Minimal | Moderate | Involved) — how big/spread-out the
+  change is (files and areas touched); **Review attention** (Low | Medium |
+  High) — how closely the author should supervise it. Keep these distinct: a
+  large but well-isolated change can be low-danger yet still Involved (lots to
+  review), while a tiny diff to core logic can warrant High review. Call out
+  what specifically drives the rating (prod migration, carry-forward/backfill,
+  auth, open-ended scope, new pillar, etc.). SpindleGraph schedules
+  higher-risk specs earlier in build batches.
 - Do NOT modify any other file. Do NOT start implementing.
 - End your final message with the path of the spec file you wrote.

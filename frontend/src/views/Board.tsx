@@ -1,5 +1,6 @@
 import { useState } from 'react'
 import { api, type Executor, type Project, type Spec } from '../api'
+import RiskChip from './RiskChip'
 import SpecDrawer from './SpecDrawer'
 
 const COLUMNS = ['draft', 'decided', 'building', 'built'] as const
@@ -39,6 +40,7 @@ export default function Board({ project, specs, executors, refresh }: {
                   <div className="title">{s.title}</div>
                   <div className="meta">
                     <span>{s.files_planned.length} files</span>
+                    <RiskChip risk={s.risk} />
                     {s.decisions.some((d) => !d.resolved) && (
                       <span className="badge-warn">
                         ⚠ {s.decisions.filter((d) => !d.resolved).length} decision(s)

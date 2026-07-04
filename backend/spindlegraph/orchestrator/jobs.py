@@ -85,10 +85,9 @@ class JobManager:
         settings = json.loads(proj["settings_json"] or "{}")
         command = ""
         if kind != "build_batch" and status == "queued":
-            argv = ex.build_argv(self._executor_row(conn, executor_id), prompt,
-                                 config.load_config(),
-                                 bool(settings.get("permission_escalation")))
-            command = _quote(argv)
+            command = ex.describe_command(
+                self._executor_row(conn, executor_id), prompt, config.load_config(),
+                bool(settings.get("permission_escalation")))
         cur = conn.execute(
             "INSERT INTO job (project_id, kind, spec_ids_json, parent_job_id, status,"
             " executor_id, command, error, log_path, created_at)"
@@ -173,6 +172,8 @@ class JobManager:
                             (project_id,)).fetchone()
         escalate = bool(json.loads(proj["settings_json"] or "{}")
                         .get("permission_escalation"))
+        if (executor or {}).get("backend") == "claude_sdk":
+            return await self._exec_sdk(conn, job, cwd, executor, escalate)
         argv = ex.build_argv(executor, prompt, cfg, escalate)
         conn.execute("UPDATE job SET status='running', started_at=?, command=? WHERE id=?",
                      (dbm.now(), _quote(argv), job_id))
@@ -257,6 +258,91 @@ class JobManager:
             " error=?, finished_at=? WHERE id=?",
             ("succeeded" if success else "failed", code, json.dumps(state["usage"]),
              cost, state["pr_url"], error, dbm.now(), job_id))
+        conn.commit()
+        self._results[job_id] = state["result_text"]
+        self._pub_job(conn, job_id, project_id)
+        return success
+
+    async def _exec_sdk(self, conn: sqlite3.Connection, job: dict, cwd: Path,
+                        executor: dict, escalate: bool) -> bool:
+        """v2: run via the Claude Agent SDK in-process. Events are normalized
+        to the same stream-json dict shapes the CLI backend produces, so the
+        log file, WebSocket channel, and UI are backend-agnostic."""
+        job_id, project_id = job["id"], job["project_id"]
+        cfg = config.load_config()
+        prompt = self._prompts.get(job_id, "")
+        conn.execute("UPDATE job SET status='running', started_at=?, command=? WHERE id=?",
+                     (dbm.now(), f"[claude-agent-sdk] {prompt}", job_id))
+        conn.commit()
+        self._pub_job(conn, job_id, project_id)
+        log_path = Path(conn.execute("SELECT log_path FROM job WHERE id=?",
+                                     (job_id,)).fetchone()[0])
+        state = {"usage": {}, "is_error": False, "result_text": "", "pr_url": None,
+                 "total_cost_usd": None, "seen_result": False}
+
+        try:
+            from claude_agent_sdk import ClaudeAgentOptions, query
+        except ImportError:
+            conn.execute(
+                "UPDATE job SET status='failed', error=?, finished_at=? WHERE id=?",
+                ("claude-agent-sdk is not installed — pip install claude-agent-sdk",
+                 dbm.now(), job_id))
+            conn.commit()
+            self._pub_job(conn, job_id, project_id)
+            return False
+
+        options = ClaudeAgentOptions(
+            cwd=str(cwd),
+            permission_mode="bypassPermissions" if escalate else "acceptEdits",
+            model=(executor or {}).get("model") or None,
+        )
+
+        def ingest(evt: dict) -> None:
+            with log_path.open("a", encoding="utf-8") as f:
+                f.write(json.dumps(evt) + "\n")
+            if evt.get("type") == "result":
+                state["seen_result"] = True
+                state["usage"] = evt.get("usage") or {}
+                state["is_error"] = bool(evt.get("is_error"))
+                state["result_text"] = str(evt.get("result") or "")
+                state["total_cost_usd"] = evt.get("total_cost_usd")
+            m = PR_RE.search(json.dumps(evt))
+            if m:
+                state["pr_url"] = m.group(0)
+            bus.publish(project_id, {"type": "job.log", "job_id": job_id, "event": evt})
+
+        timed_out = False
+        error: str | None = None
+        timeout_s = float(cfg.get("job_timeout_min", 30)) * 60
+
+        async def run() -> None:
+            async for msg in query(prompt=prompt, options=options):
+                ingest(_sdk_event(msg))
+
+        try:
+            await asyncio.wait_for(run(), timeout=timeout_s)
+        except asyncio.TimeoutError:
+            timed_out = True
+        except Exception as e:  # SDK/CLI failures surface as exceptions here
+            error = f"{type(e).__name__}: {e}"
+
+        row = conn.execute("SELECT status FROM job WHERE id=?", (job_id,)).fetchone()
+        if row and row["status"] == "canceled":
+            return False
+        success = (state["seen_result"] and not state["is_error"]
+                   and not timed_out and error is None)
+        cost = state["total_cost_usd"]
+        if cost is None:
+            cost = ex.compute_cost(state["usage"], executor)
+        if timed_out:
+            error = f"timed out after {int(timeout_s)}s"
+        elif not success and error is None:
+            error = (state["result_text"] or "sdk run produced no result")[:2000]
+        conn.execute(
+            "UPDATE job SET status=?, usage_json=?, cost_usd=?, pr_url=?, error=?,"
+            " finished_at=? WHERE id=?",
+            ("succeeded" if success else "failed", json.dumps(state["usage"]), cost,
+             state["pr_url"], None if success else error, dbm.now(), job_id))
         conn.commit()
         self._results[job_id] = state["result_text"]
         self._pub_job(conn, job_id, project_id)
@@ -462,6 +548,33 @@ def _record_outcome(conn: sqlite3.Connection, executor_id: int, success: bool,
         "UPDATE executor SET successes=?, failures=?, avg_build_cost_usd=? WHERE id=?",
         (successes, failures, avg, executor_id))
     conn.commit()
+
+
+def _sdk_event(msg) -> dict:
+    """Normalize a claude-agent-sdk message object to the CLI's stream-json
+    shape (duck-typed so tests can stub the SDK module)."""
+    t = type(msg).__name__
+    if t == "AssistantMessage":
+        content = []
+        for b in getattr(msg, "content", None) or []:
+            bt = type(b).__name__
+            if bt == "TextBlock":
+                content.append({"type": "text", "text": getattr(b, "text", "")})
+            elif bt == "ToolUseBlock":
+                content.append({"type": "tool_use", "name": getattr(b, "name", "?")})
+        return {"type": "assistant", "message": {"content": content}}
+    if t == "ResultMessage":
+        usage = getattr(msg, "usage", None) or {}
+        if not isinstance(usage, dict):
+            usage = {k: v for k, v in vars(usage).items()
+                     if isinstance(v, (int, float))}
+        return {"type": "result", "is_error": bool(getattr(msg, "is_error", False)),
+                "result": getattr(msg, "result", "") or "",
+                "usage": usage,
+                "total_cost_usd": getattr(msg, "total_cost_usd", None)}
+    if t == "SystemMessage":
+        return {"type": "system", "subtype": getattr(msg, "subtype", "")}
+    return {"type": "sdk_event", "event": t}
 
 
 def _kill_tree(proc: asyncio.subprocess.Process) -> None:
