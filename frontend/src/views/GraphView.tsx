@@ -4,6 +4,10 @@ import {
   api, expectedCost, fmt$, type CheckResult, type Executor, type GraphEdge,
   type GraphNode, type Project, type Spec,
 } from '../api'
+import FloatingEdge from './FloatingEdge'
+import { forceLayout } from './layout'
+
+const edgeTypes = { floating: FloatingEdge }
 
 export default function GraphView({ project, executors, specs, graphTick, refreshSpecs }: {
   project: Project
@@ -37,13 +41,18 @@ export default function GraphView({ project, executors, specs, graphTick, refres
   const execOf = useCallback((executorId: number | null) =>
     executors.find((e) => e.id === executorId), [executors])
 
-  const nodes: Node[] = useMemo(() => gnodes.map((n, i) => {
+  // force layout: conflicting specs cluster, independent specs drift apart
+  const positions = useMemo(() => forceLayout(
+    gnodes.map((n) => n.id),
+    gedges.map((e) => ({ a: e.spec_a, b: e.spec_b, weight: e.weight })),
+  ), [gnodes, gedges])
+
+  const nodes: Node[] = useMemo(() => gnodes.map((n) => {
     const ex = execOf(n.executor_id)
     const isSel = selected.includes(n.id)
-    const cols = Math.max(2, Math.ceil(Math.sqrt(gnodes.length)))
     return {
       id: String(n.id),
-      position: { x: (i % cols) * 230 + (Math.floor(i / cols) % 2) * 60, y: Math.floor(i / cols) * 130 },
+      position: positions.get(n.id) ?? { x: 0, y: 0 },
       data: {
         label: (
           <div className={`sgnode ${isSel ? 'sel' : ''} ${n.status}`}>
@@ -61,17 +70,18 @@ export default function GraphView({ project, executors, specs, graphTick, refres
       },
       style: { background: 'transparent', border: 'none', padding: 0, width: 'auto' },
     }
-  }), [gnodes, selected, execOf])
+  }), [gnodes, selected, execOf, positions])
 
   const edges: Edge[] = useMemo(() => gedges.map((e) => ({
     id: `${e.spec_a}-${e.spec_b}`,
     source: String(e.spec_a),
     target: String(e.spec_b),
-    label: `${e.shared_files.length} shared · w ${e.weight.toFixed(2)}${e.overridden ? ' (pinned)' : ''}`,
-    style: { stroke: 'var(--bad)', strokeWidth: 1.5 + e.weight * 4 },
-    labelStyle: { fill: 'var(--muted)', fontSize: 10 },
-    labelBgStyle: { fill: 'var(--panel)' },
-    type: 'straight',
+    type: 'floating',
+    data: {
+      label: `${e.shared_files.length} file${e.shared_files.length > 1 ? 's' : ''}${e.overridden ? ' · pinned' : ''}`,
+      tooltip: `shared: ${e.shared_files.join(', ')} · weight ${e.weight.toFixed(2)}`,
+    },
+    style: { stroke: 'var(--bad)', strokeWidth: 1.5 + e.weight * 4, opacity: 0.85 },
   })), [gedges])
 
   const toggle = useCallback((id: number) => {
@@ -108,14 +118,23 @@ export default function GraphView({ project, executors, specs, graphTick, refres
           <div className="empty">No specs yet — run /spec from the Runner tab, or add
             <span className="mono"> specs/NNNN-slug.md</span> files and refresh.</div>
         ) : (
-          <ReactFlow
-            nodes={nodes} edges={edges} fitView
-            onNodeClick={(_, node) => toggle(Number(node.id))}
-            nodesConnectable={false} proOptions={{ hideAttribution: true }}
-          >
-            <Background gap={24} />
-            <Controls showInteractive={false} />
-          </ReactFlow>
+          <div style={{ position: 'relative', width: '100%', height: '100%' }}>
+            <ReactFlow
+              nodes={nodes} edges={edges} edgeTypes={edgeTypes} fitView
+              fitViewOptions={{ padding: 0.18 }}
+              onNodeClick={(_, node) => toggle(Number(node.id))}
+              nodesConnectable={false} proOptions={{ hideAttribution: true }}
+            >
+              <Background gap={24} />
+              <Controls showInteractive={false} />
+            </ReactFlow>
+            <div className="graph-legend">
+              <span><i className="key-edge" /> shared files — can't build in parallel
+                (thicker = more overlap; hover for the files)</span>
+              <span><i className="key-sel" /> selected for the batch — click nodes to
+                toggle; distance ≈ independence</span>
+            </div>
+          </div>
         )}
       </div>
 
