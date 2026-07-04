@@ -288,7 +288,15 @@ def get_graph(project_id: int):
             "pr_url": (s["provenance"] or {}).get("pr_url"),
             "risk": s.get("risk") or {},
         } for s in specs]
-        return {"nodes": nodes, "edges": edges}
+        # directed dependency edges: source depends on (must build after) target.
+        present = {s["id"] for s in specs}
+        deps = [
+            {"source": s["id"], "target": d}
+            for s in specs
+            for d in dict.fromkeys(s.get("depends_on") or [])
+            if d in present and d != s["id"]
+        ]
+        return {"nodes": nodes, "edges": edges, "deps": deps}
     finally:
         conn.close()
 

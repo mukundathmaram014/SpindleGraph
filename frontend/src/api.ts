@@ -41,6 +41,7 @@ export interface GraphNode {
 export interface GraphEdge {
   spec_a: number; spec_b: number; shared_files: string[]; weight: number; overridden: number;
 }
+export interface DepEdge { source: number; target: number }
 export interface CheckResult {
   safe: boolean;
   conflicts: { spec_a: number; spec_b: number; shared_files: string[]; weight: number }[];
@@ -84,7 +85,7 @@ export const api = {
   patchSpec: (id: number, body: Record<string, any>) =>
     req<Spec>('PATCH', `/api/specs/${id}`, body),
   graph: (pid: number) =>
-    req<{ nodes: GraphNode[]; edges: GraphEdge[] }>('GET', `/api/projects/${pid}/graph`),
+    req<{ nodes: GraphNode[]; edges: GraphEdge[]; deps: DepEdge[] }>('GET', `/api/projects/${pid}/graph`),
   check: (pid: number, spec_ids: number[]) =>
     req<CheckResult>('POST', `/api/projects/${pid}/graph/check`, { spec_ids }),
   executors: () => req<Executor[]>('GET', '/api/executors'),

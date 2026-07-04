@@ -1,14 +1,15 @@
 import { useCallback, useEffect, useMemo, useState } from 'react'
-import ReactFlow, { Background, Controls, useNodesState, type Edge, type Node } from 'reactflow'
+import ReactFlow, { Background, Controls, MarkerType, useNodesState, type Edge, type Node } from 'reactflow'
 import {
-  api, expectedCost, fmt$, type CheckResult, type Executor, type GraphEdge,
+  api, expectedCost, fmt$, type CheckResult, type DepEdge, type Executor, type GraphEdge,
   type GraphNode, type Project, type Spec,
 } from '../api'
 import FloatingEdge from './FloatingEdge'
+import DependencyEdge from './DependencyEdge'
 import RiskChip from './RiskChip'
 import { forceLayout } from './layout'
 
-const edgeTypes = { floating: FloatingEdge }
+const edgeTypes = { floating: FloatingEdge, dependency: DependencyEdge }
 
 // wave n gets a stable hue: ring color on canvas nodes = row group in composer
 export const WAVE_COLORS = ['var(--accent)', 'var(--wave2)', 'var(--warn)', '#a855f7']
@@ -23,6 +24,7 @@ export default function GraphView({ project, executors, specs, graphTick, refres
 }) {
   const [gnodes, setGnodes] = useState<GraphNode[]>([])
   const [gedges, setGedges] = useState<GraphEdge[]>([])
+  const [gdeps, setGdeps] = useState<DepEdge[]>([])
   const [selected, setSelected] = useState<number[]>([])
   const [check, setCheck] = useState<CheckResult | null>(null)
   const [error, setError] = useState('')
@@ -32,6 +34,7 @@ export default function GraphView({ project, executors, specs, graphTick, refres
     api.graph(project.id).then((g) => {
       setGnodes(g.nodes)
       setGedges(g.edges)
+      setGdeps(g.deps ?? [])
       setSelected((sel) => sel.filter((id) => g.nodes.some((n) => n.id === id)))
     }).catch((e) => setError(String(e)))
   }, [project.id, graphTick])
@@ -114,17 +117,28 @@ export default function GraphView({ project, executors, specs, graphTick, refres
     setNodes(gnodes.map((n) => buildNode(n, positions.get(n.id) ?? { x: 0, y: 0 })))
   }, [gnodes, positions, buildNode, setNodes])
 
-  const edges: Edge[] = useMemo(() => gedges.map((e) => ({
-    id: `${e.spec_a}-${e.spec_b}`,
-    source: String(e.spec_a),
-    target: String(e.spec_b),
-    type: 'floating',
-    data: {
-      label: `${e.shared_files.length} file${e.shared_files.length > 1 ? 's' : ''}${e.overridden ? ' · pinned' : ''}`,
-      tooltip: `shared: ${e.shared_files.join(', ')} · weight ${e.weight.toFixed(2)}`,
-    },
-    style: { stroke: 'var(--bad)', strokeWidth: 1.5 + e.weight * 4, opacity: 0.85 },
-  })), [gedges])
+  const edges: Edge[] = useMemo(() => {
+    const conflict: Edge[] = gedges.map((e) => ({
+      id: `${e.spec_a}-${e.spec_b}`,
+      source: String(e.spec_a),
+      target: String(e.spec_b),
+      type: 'floating',
+      data: {
+        label: `${e.shared_files.length} file${e.shared_files.length > 1 ? 's' : ''}${e.overridden ? ' · pinned' : ''}`,
+        tooltip: `shared: ${e.shared_files.join(', ')} · weight ${e.weight.toFixed(2)}`,
+      },
+      style: { stroke: 'var(--bad)', strokeWidth: 1.5 + e.weight * 4, opacity: 0.85 },
+    }))
+    const deps: Edge[] = gdeps.map((d) => ({
+      id: `dep-${d.source}-${d.target}`,
+      source: String(d.source),
+      target: String(d.target),
+      type: 'dependency',
+      markerEnd: { type: MarkerType.ArrowClosed, color: '#a855f7', width: 16, height: 16 },
+      style: { stroke: '#a855f7', strokeWidth: 2, strokeDasharray: '6 4' },
+    }))
+    return [...conflict, ...deps]
+  }, [gedges, gdeps])
 
   const toggle = useCallback((id: number) => {
     setSelected((sel) => sel.includes(id) ? sel.filter((x) => x !== id) : [...sel, id])
@@ -200,6 +214,8 @@ export default function GraphView({ project, executors, specs, graphTick, refres
             <div className="graph-legend">
               <span><i className="key-edge" /> shared files — can't build in parallel
                 (thicker = more overlap; hover for the files)</span>
+              <span><i className="key-dep" /> depends on — arrow points to the spec that
+                must build first</span>
               <span><i className="key-sel" /> selected for the batch — click nodes to
                 toggle; distance ≈ independence</span>
               <span>

@@ -59,7 +59,7 @@ export default function Board({ project, specs, executors, refresh }: {
         })}
       </div>
       {open && (
-        <SpecDrawer spec={open} project={project} executors={executors}
+        <SpecDrawer spec={open} project={project} executors={executors} specs={specs}
           onClose={() => setOpenId(null)} refresh={refresh} />
       )}
     </>

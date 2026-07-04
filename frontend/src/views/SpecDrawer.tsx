@@ -2,10 +2,11 @@ import { useEffect, useState } from 'react'
 import { api, type Executor, type Project, type Spec } from '../api'
 import RiskChip from './RiskChip'
 
-export default function SpecDrawer({ spec, project, executors, onClose, refresh }: {
+export default function SpecDrawer({ spec, project, executors, specs, onClose, refresh }: {
   spec: Spec
   project: Project
   executors: Executor[]
+  specs: Spec[]
   onClose: () => void
   refresh: () => Promise<void>
 }) {
@@ -14,6 +15,7 @@ export default function SpecDrawer({ spec, project, executors, onClose, refresh 
   const [error, setError] = useState('')
   const [busy, setBusy] = useState(false)
   useEffect(() => { setBody(spec.body_md); setEditing(false) }, [spec.id, spec.body_md])
+  const otherSpecs = specs.filter((o) => o.id !== spec.id && o.status !== 'archived')
 
   const patch = async (payload: Record<string, unknown>) => {
     setBusy(true)
@@ -134,6 +136,30 @@ export default function SpecDrawer({ spec, project, executors, onClose, refresh 
               </li>
             ))}
           </ul>
+        </section>
+
+        <section style={{ display: 'grid', gap: 6 }}>
+          <h2 className="section" style={{ margin: 0 }}>Depends on · builds after</h2>
+          {otherSpecs.length === 0 ? (
+            <span style={{ color: 'var(--muted)', fontSize: 13 }}>No other specs to depend on.</span>
+          ) : (
+            <div className="depschooser">
+              {otherSpecs.map((o) => (
+                <label key={o.id} className="depsrow">
+                  <input type="checkbox" checked={spec.depends_on.includes(o.id)} disabled={busy}
+                    onChange={(e) => {
+                      const next = e.target.checked
+                        ? [...spec.depends_on, o.id]
+                        : spec.depends_on.filter((x) => x !== o.id)
+                      void patch({ depends_on: next })
+                    }} />
+                  <span className="mono">#{String(o.number).padStart(4, '0')}</span>
+                  <span className="grow">{o.title}</span>
+                  <span className={`pill ${o.status}`}>{o.status}</span>
+                </label>
+              ))}
+            </div>
+          )}
         </section>
 
         <section style={{ display: 'grid', gap: 8 }}>
