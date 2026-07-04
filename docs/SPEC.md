@@ -223,6 +223,9 @@ CREATE TABLE executor (
   prior_strength REAL NOT NULL DEFAULT 10, -- how many pseudo-builds the prior is worth
   successes     INTEGER NOT NULL DEFAULT 0,-- real recorded outcomes (see §10)
   failures      INTEGER NOT NULL DEFAULT 0,
+  input_price_per_mtok  REAL,              -- USD per 1M input tokens; 0/NULL for local models
+  output_price_per_mtok REAL,              -- USD per 1M output tokens
+  avg_build_cost_usd REAL,                 -- running mean of actual per-build cost (see §10)
   enabled       INTEGER NOT NULL DEFAULT 1
 );
 -- Estimated P(success) = (prior_success·prior_strength + successes)
@@ -274,6 +277,9 @@ CREATE TABLE job (
   executor_id   INTEGER REFERENCES executor(id),
   outcome       TEXT,                      -- build jobs only: success | failure per §10's
                                            -- definition (checks passed + PR opened); feeds calibration
+  usage_json    TEXT NOT NULL DEFAULT '{}',-- accumulated from stream: {input_tokens, output_tokens,
+                                           --  cache_read_input_tokens, cache_creation_input_tokens}
+  cost_usd      REAL,                      -- computed at job end from executor pricing (see §10)
   command       TEXT NOT NULL,             -- the exact claude invocation, for audit
   worktree_path TEXT,
   branch        TEXT,
@@ -545,6 +551,36 @@ ones where the work is easy or low-blast-radius.
   probabilities across candidate wave orderings; report distribution of
   completed-spec counts and expected retries per ordering; recommend one.
 
+### Cost display (resolves D7)
+
+Cost sits next to probability everywhere an executor is assigned, making
+assignment an explicit **cost-vs-confidence tradeoff**.
+
+- **Actual cost (recorded):** the `claude_code` stream-json events carry
+  `usage` (input, output, cache-read, cache-creation tokens); the runner
+  accumulates them onto `job.usage_json` and computes at job end:
+  `cost = (in·p_in + out·p_out + cache_read·0.1·p_in + cache_write·1.25·p_in) / 1M`
+  using the executor's pricing. Local backends report usage without pricing →
+  cost 0.
+- **Pricing** lives on the executor row, seeded from published rates at setup
+  (2026-07: Fable $10/$50, Opus $5/$25, Sonnet 5 $3/$15, Haiku $1/$5 per
+  MTok) and **editable in the config panel** — prices change (e.g. Sonnet 5's
+  intro pricing) and SpindleGraph must not hardcode them.
+- **Estimated cost (pre-launch):** the executor's `avg_build_cost_usd` — a
+  running mean of its recorded build costs, seeded with a hand-set guess the
+  same way priors are. Difficulty scaling (D6) will refine this per spec
+  later; v1 shows the executor average.
+- **Expected cost to success:** `E = est_cost / P` — the expected total spend
+  if you keep retrying on the same executor until it lands (geometric). This
+  is the headline number in the composer: a $0 local model at P=0.6 and a
+  $2 Sonnet at P=0.9 stop being incomparable — E surfaces the retry tax
+  (though for local models the tax is your *time*, which the
+  assignment-advice overlay already flags via skipped conflicting neighbors).
+- **Display:** composer launch review gets per-spec columns
+  `executor · P · est $ · E[$ to success]` plus batch totals; node tooltips
+  show the same; the config panel shows each executor's live avg cost next to
+  its calibrated success rate.
+
 ---
 
 ## 11. GUI (v0 scope)
@@ -568,8 +604,9 @@ Single-page app, project switcher in the header. Views:
 4. **Batch composer** — multi-select specs (board or canvas); live safety
    check via `/graph/check`; canvas highlights conflicts in red and suggested
    waves by hue; per-spec **executor picker** in the launch review (defaults
-   shown, editable in place); launch → build_batch job; wave progress +
-   per-spec PR links.
+   shown, editable in place) with `P · est $ · E[$ to success]` columns and
+   batch totals (v1); launch → build_batch job; wave progress + per-spec PR
+   links.
 5. **Config** — global: claude binary path, max_parallel, and the **executor
    roster** (add/edit executors, set priors; v1 shows each executor's live
    calibrated rate and outcome counts); per-project: default executor,
@@ -662,6 +699,8 @@ Done when this demo path works end-to-end:
 - Success probabilities live: outcomes recorded, executor rates calibrating,
   node badges on the canvas, wave-success and assignment-advice overlays; edge
   weight editing. Monte-Carlo over orderings may slip to late v1.
+- Cost display live: usage captured per job, executor pricing + avg cost
+  calibrating, `P / est $ / E[$]` columns in the composer with batch totals.
 
 ### v2 — local agent + polish
 
@@ -711,7 +750,6 @@ Done when this demo path works end-to-end:
 - **D6 — Difficulty scaling.** Per-spec modifiers on P (file count, new files,
   unresolved decisions, LOC touched by conflicting built specs). Deferred past
   the first v1 cut; needs outcome data to fit against, not guesses.
-- **D7 — Cost awareness.** Executors have very different costs (Fable vs a
-  local Qwen). Should the composer show estimated cost next to probability so
-  assignment is an explicit cost-vs-confidence tradeoff? Cheap to add once
-  token counts are captured from the stream; decide during v1.
+- **D7 — Cost awareness. RESOLVED 2026-07-03:** yes — per-executor pricing +
+  token capture from the stream, estimated cost and expected-cost-to-success
+  shown beside probability in the composer. See §10 → Cost display.
