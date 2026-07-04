@@ -1,19 +1,10 @@
 :root {
-  --bg: #f4f6f6; --panel: #ffffff; --panel-2: #eef1f1;
-  --ink: #16211f; --muted: #5b6b68; --line: #d7dedd;
-  --accent: #0e7c6b; --accent-ink: #ffffff; --wave2: #2563eb;
-  --bad: #c2483b; --warn: #a16207; --good: #2e7d4f; --chip: #e7efed;
-  --shadow: 0 1px 3px rgba(22,33,31,.08), 0 4px 14px rgba(22,33,31,.05);
-  color-scheme: light dark;
-}
-@media (prefers-color-scheme: dark) {
-  :root {
-    --bg: #0f1514; --panel: #171f1d; --panel-2: #1e2926;
-    --ink: #e5eceb; --muted: #8da19c; --line: #2b3835;
-    --accent: #35b6a0; --accent-ink: #08211c; --wave2: #7aa5f5;
-    --bad: #e0705f; --warn: #d9a52e; --good: #5cb885; --chip: #223330;
-    --shadow: 0 1px 3px rgba(0,0,0,.4), 0 4px 14px rgba(0,0,0,.3);
-  }
+  --bg: #070b13; --panel: #111826; --panel-2: #1a2336;
+  --ink: #e8edf9; --muted: #8b98b4; --line: #26324c;
+  --accent: #3b82f6; --accent-ink: #ffffff; --wave2: #22d3ee;
+  --bad: #f2635a; --warn: #e0a63a; --good: #57c98c; --chip: #1b2842;
+  --shadow: 0 1px 3px rgba(0,0,0,.5), 0 6px 20px rgba(0,0,0,.45);
+  color-scheme: dark;
 }
 
 * { box-sizing: border-box; }
@@ -192,3 +183,12 @@ table.executors input.wide { width: 160px; }
 .diff-add { background: color-mix(in srgb, var(--good) 16%, transparent); color: var(--good); }
 .diff-del { background: color-mix(in srgb, var(--bad) 14%, transparent); color: var(--bad); }
 .diff-same { color: var(--muted); }
+
+/* dependencies (directed edges + picker) */
+.graph-legend .key-dep { width: 18px; height: 0; border-top: 2px dashed #a855f7; }
+.depschooser {
+  display: grid; gap: 1px; max-height: 168px; overflow-y: auto;
+  border: 1px solid var(--line); border-radius: 8px; padding: 5px 8px;
+}
+.depsrow { display: flex; gap: 8px; align-items: center; font-size: 13px; padding: 3px 0; }
+.depsrow input[type="checkbox"] { width: auto; padding: 0; accent-color: var(--accent); }
