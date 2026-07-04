@@ -1,5 +1,5 @@
 import { useCallback, useEffect, useMemo, useState } from 'react'
-import ReactFlow, { Background, Controls, type Edge, type Node } from 'reactflow'
+import ReactFlow, { Background, Controls, useNodesState, type Edge, type Node } from 'reactflow'
 import {
   api, expectedCost, fmt$, type CheckResult, type Executor, type GraphEdge,
   type GraphNode, type Project, type Spec,
@@ -47,12 +47,14 @@ export default function GraphView({ project, executors, specs, graphTick, refres
     gedges.map((e) => ({ a: e.spec_a, b: e.spec_b, weight: e.weight })),
   ), [gnodes, gedges])
 
-  const nodes: Node[] = useMemo(() => gnodes.map((n) => {
+  const [nodes, setNodes, onNodesChange] = useNodesState([])
+
+  const buildNode = useCallback((n: GraphNode, position: { x: number; y: number }): Node => {
     const ex = execOf(n.executor_id)
     const isSel = selected.includes(n.id)
     return {
       id: String(n.id),
-      position: positions.get(n.id) ?? { x: 0, y: 0 },
+      position,
       data: {
         label: (
           <div className={`sgnode ${isSel ? 'sel' : ''} ${n.status}`}>
@@ -70,7 +72,20 @@ export default function GraphView({ project, executors, specs, graphTick, refres
       },
       style: { background: 'transparent', border: 'none', padding: 0, width: 'auto' },
     }
-  }), [gnodes, selected, execOf, positions])
+  }, [execOf, selected])
+
+  // rebuild node contents on data/selection changes, but keep dragged positions
+  useEffect(() => {
+    setNodes((prev) => {
+      const kept = new Map(prev.map((p) => [p.id, p.position]))
+      return gnodes.map((n) =>
+        buildNode(n, kept.get(String(n.id)) ?? positions.get(n.id) ?? { x: 0, y: 0 }))
+    })
+  }, [gnodes, positions, buildNode, setNodes])
+
+  const relayout = useCallback(() => {
+    setNodes(gnodes.map((n) => buildNode(n, positions.get(n.id) ?? { x: 0, y: 0 })))
+  }, [gnodes, positions, buildNode, setNodes])
 
   const edges: Edge[] = useMemo(() => gedges.map((e) => ({
     id: `${e.spec_a}-${e.spec_b}`,
@@ -122,6 +137,7 @@ export default function GraphView({ project, executors, specs, graphTick, refres
             <ReactFlow
               nodes={nodes} edges={edges} edgeTypes={edgeTypes} fitView
               fitViewOptions={{ padding: 0.18 }}
+              onNodesChange={onNodesChange}
               onNodeClick={(_, node) => toggle(Number(node.id))}
               nodesConnectable={false} proOptions={{ hideAttribution: true }}
             >
@@ -133,6 +149,10 @@ export default function GraphView({ project, executors, specs, graphTick, refres
                 (thicker = more overlap; hover for the files)</span>
               <span><i className="key-sel" /> selected for the batch — click nodes to
                 toggle; distance ≈ independence</span>
+              <span>
+                drag to rearrange ·{' '}
+                <button className="linklike" onClick={relayout}>↺ re-layout</button>
+              </span>
             </div>
           </div>
         )}

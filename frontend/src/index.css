@@ -124,6 +124,10 @@ h2.section { font-size: 11.5px; letter-spacing: .1em; text-transform: uppercase;
   max-width: 340px;
 }
 .graph-legend i { display: inline-block; vertical-align: middle; margin-right: 5px; }
+button.linklike {
+  background: none; border: none; padding: 0; color: var(--accent);
+  cursor: pointer; font-size: inherit; text-decoration: underline;
+}
 .graph-legend .key-edge { width: 18px; height: 0; border-top: 3px solid var(--bad); }
 .graph-legend .key-sel {
   width: 11px; height: 11px; border-radius: 3px; border: 2px solid var(--accent);
