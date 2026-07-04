@@ -40,6 +40,14 @@ def main():
         spec_rel = prompt.split(None, 1)[1].strip()
         slug = Path(spec_rel).stem
         Path(f"built_{slug}.txt").write_text("built\n", encoding="utf-8")
+        # optional deviation from the plan: also modify a nominated file so the
+        # actual diff differs from Affected files (exercises reconciliation).
+        touch = os.environ.get("FAKE_CLAUDE_TOUCH")
+        if touch:
+            tp = Path(touch)
+            tp.parent.mkdir(parents=True, exist_ok=True)
+            with tp.open("a", encoding="utf-8") as fh:
+                fh.write("# touched by fake build\n")
         subprocess.run(["git", "add", "-A"], check=True)
         subprocess.run(["git", "commit", "-q", "-m", f"{slug}: fake build"], check=True)
         emit({"type": "assistant", "message": {
@@ -66,6 +74,17 @@ def main():
         emit({"type": "result", "is_error": False, "result": f"Wrote {f}",
               "usage": {"input_tokens": 100, "output_tokens": 50},
               "total_cost_usd": 0.05})
+    elif "propose an updated version" in prompt.lower():
+        # reconcile pass: echo the embedded spec back with a reconciled note so
+        # the proposal is valid, changed markdown the test can detect.
+        body = ""
+        marker, end = "=== CURRENT SPEC FILE ===", "=== END SPEC FILE ==="
+        if marker in prompt and end in prompt:
+            body = prompt.split(marker, 1)[1].split(end, 1)[0].strip("\n")
+        revised = body + "\n\n## Reconciled\n- adjusted to match the upstream build\n"
+        emit({"type": "result", "is_error": False, "result": revised,
+              "usage": {"input_tokens": 200, "output_tokens": 80},
+              "total_cost_usd": 0.02})
     else:
         emit({"type": "result", "is_error": False, "result": "ok",
               "usage": {"input_tokens": 10, "output_tokens": 5}})

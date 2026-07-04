@@ -15,7 +15,7 @@ from pathlib import Path
 
 from .. import config
 from .. import db as dbm
-from .. import graph, importer
+from .. import graph, importer, reconcile
 from ..events import bus
 from . import executors as ex
 from . import worktrees as wt
@@ -34,6 +34,8 @@ class JobManager:
         self._procs: dict[int, asyncio.subprocess.Process] = {}
         self._prompts: dict[int, str] = {}
         self._waves: dict[int, list[list[int]]] = {}
+        self._results: dict[int, str] = {}
+        self._reconcile_meta: dict[int, dict] = {}
         self._sem: asyncio.Semaphore | None = None
 
     # ---------- helpers ----------
@@ -142,6 +144,8 @@ class JobManager:
                     await self._run_build(conn, dict(job), dict(proj))
                 elif job["kind"] == "build_batch":
                     await self._run_batch(conn, dict(job), dict(proj))
+                elif job["kind"] == "reconcile":
+                    await self._run_reconcile(conn, dict(job), dict(proj))
                 else:
                     await self._run_simple(conn, dict(job), dict(proj))
             except Exception as e:  # defensive: a job must always reach a terminal state
@@ -154,6 +158,8 @@ class JobManager:
             self._procs.pop(job_id, None)
             self._prompts.pop(job_id, None)
             self._waves.pop(job_id, None)
+            self._results.pop(job_id, None)
+            self._reconcile_meta.pop(job_id, None)
             conn.close()
 
     async def _exec(self, conn: sqlite3.Connection, job: dict, cwd: Path,
@@ -252,6 +258,7 @@ class JobManager:
             ("succeeded" if success else "failed", code, json.dumps(state["usage"]),
              cost, state["pr_url"], error, dbm.now(), job_id))
         conn.commit()
+        self._results[job_id] = state["result_text"]
         self._pub_job(conn, job_id, project_id)
         return success
 
@@ -300,13 +307,16 @@ class JobManager:
             success = await self._exec(conn, job, path, executor)
 
         jrow = self.job_dict(conn, job["id"])
+        actual: list[dict] = []
         if success:
             provenance = {"branch": jrow.get("branch"), "pr_url": jrow.get("pr_url"),
                           "built_at": dbm.now(), "job_id": job["id"]}
+            actual = reconcile.capture_actual_files(
+                repo, proj["default_branch"], jrow.get("branch"), spec["file_path"])
             conn.execute(
-                "UPDATE spec SET status='built', provenance_json=?, updated_at=?"
-                " WHERE id=?",
-                (json.dumps(provenance), dbm.now(), spec["id"]))
+                "UPDATE spec SET status='built', provenance_json=?, files_actual_json=?,"
+                " updated_at=? WHERE id=?",
+                (json.dumps(provenance), json.dumps(actual), dbm.now(), spec["id"]))
             conn.execute("UPDATE job SET outcome='success' WHERE id=?", (job["id"],))
             wt.remove_worktree(repo, Path(jrow["worktree_path"]))
         else:
@@ -318,8 +328,63 @@ class JobManager:
         conn.commit()
         if executor and jrow.get("status") in ("succeeded", "failed"):
             _record_outcome(conn, executor["id"], success, jrow.get("cost_usd"))
+        if success:
+            await self._reconcile_after_build(conn, proj, dict(spec), actual, job["id"])
         bus.publish(proj["id"], {"type": "specs.updated"})
         self._pub_job(conn, job["id"], proj["id"])
+
+    async def _reconcile_after_build(self, conn: sqlite3.Connection, proj: dict,
+                                     spec: dict, actual: list[dict],
+                                     build_job_id: int) -> None:
+        """v1 reconcile (§10): re-derive the graph with the built spec's actual
+        files, flag specs whose conflict set changed as ``stale``, and launch a
+        proposal job for each. Proposals are stored, never auto-applied."""
+        stale = reconcile.mark_stale_after_build(conn, proj["id"], spec["id"])
+        bus.publish(proj["id"], {"type": "graph.updated"})
+        if not stale:
+            return
+        for st in stale:
+            prompt = reconcile.build_prompt(
+                spec["number"], spec["title"], actual, st["body_md"])
+            child = self.create_job(
+                conn, proj["id"], "reconcile", [st["id"]],
+                executor_id=self.default_executor_id(conn, proj),
+                prompt=prompt, parent_job_id=build_job_id)
+            self._reconcile_meta[child["id"]] = {
+                "stale_spec_id": st["id"], "trigger_spec_id": spec["id"],
+                "prior_status": st["prior_status"]}
+            self.launch(child["id"])
+        bus.publish(proj["id"], {"type": "specs.updated"})
+
+    async def _run_reconcile(self, conn: sqlite3.Connection, job: dict,
+                             proj: dict) -> None:
+        """Run one stale spec's proposal pass in the repo; store the result."""
+        repo = Path(proj["repo_path"])
+        wt.ensure_commands(repo)
+        executor = self._executor_row(conn, job["executor_id"])
+        meta = self._reconcile_meta.get(job["id"], {})
+        success = await self._exec(conn, job, repo, executor)
+        result_text = (self._results.get(job["id"]) or "").strip()
+        if not (success and meta):
+            return
+        spec_id = meta["stale_spec_id"]
+        prior = meta.get("prior_status", "draft")
+        no_change = (not result_text
+                     or result_text.upper().startswith(reconcile.NO_CHANGES))
+        conn.execute(
+            "INSERT INTO reconcile_proposal (project_id, spec_id, trigger_spec_id,"
+            " job_id, prior_status, proposed_body, no_change, status, created_at)"
+            " VALUES (?,?,?,?,?,?,?,?,?)",
+            (proj["id"], spec_id, meta.get("trigger_spec_id"), job["id"], prior,
+             "" if no_change else result_text, int(no_change),
+             "rejected" if no_change else "pending", dbm.now()))
+        if no_change:
+            conn.execute(
+                "UPDATE spec SET status=?, updated_at=? WHERE id=? AND status='stale'",
+                (prior, dbm.now(), spec_id))
+        conn.commit()
+        bus.publish(proj["id"], {"type": "specs.updated"})
+        bus.publish(proj["id"], {"type": "proposals.updated"})
 
     async def _run_batch(self, conn: sqlite3.Connection, job: dict, proj: dict) -> None:
         waves = self._waves.get(job["id"]) or []

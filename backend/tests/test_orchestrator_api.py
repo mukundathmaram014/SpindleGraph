@@ -199,3 +199,58 @@ def test_executor_calibration_updates(client, git_repo):
                  if e["id"] == sonnet["id"])
     assert after["successes"] == before + 1
     assert after["avg_build_cost_usd"] == pytest.approx(1.23)
+
+
+def wait_proposals(client, pid, timeout=60) -> list:
+    deadline = time.time() + timeout
+    while time.time() < deadline:
+        props = client.get(f"/api/projects/{pid}/proposals").json()
+        if props:
+            return props
+        time.sleep(0.15)
+    return []
+
+
+def test_reconcile_proposal_accept(client, git_repo, monkeypatch):
+    # spec 9 builds but actually touches loader.py (spec 14's planned file),
+    # so spec 14 becomes stale and gets a reconcile proposal.
+    monkeypatch.setenv("FAKE_CLAUDE_TOUCH", "src/settings/loader.py")
+    proj = add_project(client, git_repo)
+    s9 = spec_by_number(client, proj["id"], 9)
+    r = client.post("/api/jobs", json={"project_id": proj["id"], "kind": "build",
+                                       "spec_ids": [s9["id"]]})
+    assert wait_job(client, r.json()["id"])["status"] == "succeeded"
+
+    props = wait_proposals(client, proj["id"])
+    assert len(props) == 1, props
+    p = props[0]
+    assert p["spec_number"] == 14 and p["trigger_number"] == 9
+    assert "## Reconciled" in p["proposed_body"]
+    assert spec_by_number(client, proj["id"], 14)["status"] == "stale"
+
+    acc = client.post(f"/api/proposals/{p['id']}/accept")
+    assert acc.status_code == 200, acc.text
+    s14 = spec_by_number(client, proj["id"], 14)
+    assert s14["status"] == "decided"          # prior status restored
+    assert "## Reconciled" in s14["body_md"]   # proposed body written to the file
+    assert client.get(f"/api/projects/{proj['id']}/proposals").json() == []
+
+
+def test_reconcile_proposal_reject(client, git_repo, monkeypatch):
+    monkeypatch.setenv("FAKE_CLAUDE_TOUCH", "src/settings/loader.py")
+    proj = add_project(client, git_repo)
+    s9 = spec_by_number(client, proj["id"], 9)
+    r = client.post("/api/jobs", json={"project_id": proj["id"], "kind": "build",
+                                       "spec_ids": [s9["id"]]})
+    assert wait_job(client, r.json()["id"])["status"] == "succeeded"
+
+    props = wait_proposals(client, proj["id"])
+    assert len(props) == 1, props
+    rej = client.post(f"/api/proposals/{props[0]['id']}/reject")
+    assert rej.status_code == 200, rej.text
+
+    s14 = spec_by_number(client, proj["id"], 14)
+    assert s14["status"] == "decided"              # stale cleared
+    assert "## Reconciled" not in s14["body_md"]   # file left untouched
+    assert client.get(f"/api/projects/{proj['id']}/proposals").json() == []
+

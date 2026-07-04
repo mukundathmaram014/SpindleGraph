@@ -220,11 +220,13 @@ def import_project(conn: sqlite3.Connection, project_id: int) -> dict:
             dbm.now(),
         )
         if number in existing:
-            # 'built' is operational state owned by SpindleGraph: a spec built on
-            # an unmerged branch still reads draft/decided in the default-branch
-            # file, so don't let a re-import downgrade it.
-            if existing[number]["status"] == "built" and rec["status"] in ("draft", "decided"):
-                args = args[:2] + ("built",) + args[3:]
+            # 'built'/'stale' are operational states owned by SpindleGraph: a spec
+            # built on an unmerged branch still reads draft/decided in the
+            # default-branch file, and staleness is a derived hint, so don't let a
+            # re-import silently downgrade either.
+            if existing[number]["status"] in ("built", "stale") \
+                    and rec["status"] in ("draft", "decided"):
+                args = args[:2] + (existing[number]["status"],) + args[3:]
             conn.execute(
                 "UPDATE spec SET slug=?, title=?, status=?, file_path=?, body_md=?,"
                 " body_hash=?, files_planned_json=?, decisions_json=?, updated_at=?"

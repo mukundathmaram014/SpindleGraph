@@ -327,6 +327,98 @@ def patch_edge(project_id: int, spec_a: int, spec_b: int, body: EdgePatch):
         conn.close()
 
 
+# ---------------- reconcile proposals ----------------
+
+@router.get("/projects/{project_id}/proposals")
+def list_proposals(project_id: int, status: str | None = "pending"):
+    conn = _conn()
+    try:
+        _get_project(conn, project_id)
+        q = "SELECT * FROM reconcile_proposal WHERE project_id=?"
+        params: list = [project_id]
+        if status:
+            q += " AND status=?"
+            params.append(status)
+        q += " ORDER BY id DESC"
+        out = []
+        for r in conn.execute(q, params):
+            d = dict(r)
+            spec = conn.execute(
+                "SELECT number, slug, title, body_md, status FROM spec WHERE id=?",
+                (d["spec_id"],)).fetchone()
+            if spec:
+                d.update(spec_number=spec["number"], spec_slug=spec["slug"],
+                         spec_title=spec["title"], spec_status=spec["status"],
+                         current_body=spec["body_md"])
+            if d.get("trigger_spec_id"):
+                trig = conn.execute("SELECT number, title FROM spec WHERE id=?",
+                                    (d["trigger_spec_id"],)).fetchone()
+                if trig:
+                    d.update(trigger_number=trig["number"], trigger_title=trig["title"])
+            out.append(d)
+        return out
+    finally:
+        conn.close()
+
+
+def _get_proposal(conn, proposal_id: int):
+    row = conn.execute("SELECT * FROM reconcile_proposal WHERE id=?",
+                       (proposal_id,)).fetchone()
+    if row is None:
+        raise HTTPException(404, "proposal not found")
+    return row
+
+
+@router.post("/proposals/{proposal_id}/accept")
+def accept_proposal(proposal_id: int):
+    conn = _conn()
+    try:
+        p = _get_proposal(conn, proposal_id)
+        if p["status"] != "pending":
+            raise HTTPException(409, f"proposal already {p['status']}")
+        spec = _get_spec(conn, p["spec_id"])
+        proj = _get_project(conn, p["project_id"])
+        if not p["no_change"] and p["proposed_body"]:
+            path = Path(proj["repo_path"]) / spec["file_path"]
+            path.write_text(p["proposed_body"], encoding="utf-8")
+        conn.execute("UPDATE reconcile_proposal SET status='accepted' WHERE id=?",
+                     (proposal_id,))
+        conn.commit()
+        importer.import_project(conn, p["project_id"])
+        # importer preserves 'stale'; clear it now the spec is reconciled.
+        conn.execute(
+            "UPDATE spec SET status=?, updated_at=? WHERE id=? AND status='stale'",
+            (p["prior_status"], dbm.now(), p["spec_id"]))
+        conn.commit()
+        bus.publish(p["project_id"], {"type": "specs.updated"})
+        bus.publish(p["project_id"], {"type": "graph.updated"})
+        bus.publish(p["project_id"], {"type": "proposals.updated"})
+        return _spec_dict(_get_spec(conn, p["spec_id"]))
+    finally:
+        conn.close()
+
+
+@router.post("/proposals/{proposal_id}/reject")
+def reject_proposal(proposal_id: int):
+    conn = _conn()
+    try:
+        p = _get_proposal(conn, proposal_id)
+        if p["status"] != "pending":
+            raise HTTPException(409, f"proposal already {p['status']}")
+        conn.execute("UPDATE reconcile_proposal SET status='rejected' WHERE id=?",
+                     (proposal_id,))
+        conn.execute(
+            "UPDATE spec SET status=?, updated_at=? WHERE id=? AND status='stale'",
+            (p["prior_status"], dbm.now(), p["spec_id"]))
+        conn.commit()
+        bus.publish(p["project_id"], {"type": "specs.updated"})
+        bus.publish(p["project_id"], {"type": "graph.updated"})
+        bus.publish(p["project_id"], {"type": "proposals.updated"})
+        return {"ok": True}
+    finally:
+        conn.close()
+
+
 # ---------------- executors ----------------
 
 @router.get("/executors")

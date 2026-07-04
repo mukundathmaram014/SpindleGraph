@@ -91,6 +91,19 @@ CREATE TABLE IF NOT EXISTS job (
   finished_at   TEXT,
   created_at    TEXT NOT NULL
 );
+
+CREATE TABLE IF NOT EXISTS reconcile_proposal (
+  id              INTEGER PRIMARY KEY,
+  project_id      INTEGER NOT NULL REFERENCES project(id),
+  spec_id         INTEGER NOT NULL REFERENCES spec(id),
+  trigger_spec_id INTEGER REFERENCES spec(id),  -- the built spec that caused staleness
+  job_id          INTEGER REFERENCES job(id),
+  prior_status    TEXT NOT NULL DEFAULT 'draft',-- status to restore on accept/reject
+  proposed_body   TEXT NOT NULL DEFAULT '',     -- full revised spec markdown
+  no_change       INTEGER NOT NULL DEFAULT 0,   -- agent said the spec is still accurate
+  status          TEXT NOT NULL DEFAULT 'pending', -- pending | accepted | rejected
+  created_at      TEXT NOT NULL
+);
 """
 
 # Seeded once, editable in the GUI. Prices are USD per 1M tokens (2026-07
