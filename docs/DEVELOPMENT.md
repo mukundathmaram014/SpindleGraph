@@ -14,15 +14,21 @@ docs/                     SPEC (design record) · ARCHITECTURE · USER-GUIDE · 
 ## Dev loop
 
 ```sh
-# backend, terminal 1
-cd backend && .venv/Scripts/python -m uvicorn spindlegraph.main:app --port 8787 --reload
+# backend, terminal 1  (restart by hand after backend changes)
+cd backend && .venv/Scripts/python -m uvicorn spindlegraph.main:app --port 8787
 
 # frontend, terminal 2 (hot reload; proxies /api + /ws to :8787)
 cd frontend && npm run dev        # http://localhost:5173
 ```
 
-Use a throwaway `SPINDLEGRAPH_HOME` while developing so you don't pollute your
-real state: `SPINDLEGRAPH_HOME=/tmp/sg-dev uvicorn …`.
+The backend loads its projects and DB from `~/.spindlegraph/` (or
+`SPINDLEGRAPH_HOME` if set) — start it with the **same** home each time or it
+comes up with no projects. Use a throwaway `SPINDLEGRAPH_HOME` while developing
+so you don't pollute your real state: `SPINDLEGRAPH_HOME=/tmp/sg-dev uvicorn …`.
+
+Don't use `uvicorn --reload`: its graceful shutdown hangs on the app's
+long-lived WebSocket bus and job tasks, wedging the port. Restart the backend
+by hand after changing backend code.
 
 ## Testing
 

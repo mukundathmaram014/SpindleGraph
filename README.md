@@ -35,6 +35,14 @@ python -m venv .venv
 .venv/Scripts/python -m uvicorn spindlegraph.main:app --port 8787
 ```
 
+The backend keeps all its state — your added projects, the SQLite DB, job logs,
+and build worktrees — under `~/.spindlegraph/`. Set `SPINDLEGRAPH_HOME` to use a
+different directory, and start the backend with the **same** value every time:
+launch it against a fresh location and it comes up with no projects. After
+changing backend code, stop and restart it by hand — don't use `uvicorn
+--reload`, whose graceful shutdown hangs on SpindleGraph's long-lived WebSocket
+and job tasks.
+
 Frontend — either build once and let the backend serve it:
 
 ```sh
