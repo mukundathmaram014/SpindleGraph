@@ -25,6 +25,10 @@ via the headless CLI (`claude -p`), migrating to the Claude Agent SDK in v2.
 | Backend | Python + **FastAPI**, **SQLite**, WebSockets for live logs |
 | Agent execution | Claude Code **headless CLI** (`claude -p`) for v0/v1; Agent SDK in v2 |
 | Workflow commands | **Bundled in this repo** (`commands/`), copied into target repos on onboarding |
+| Executors | Pluggable **Executor** interface from v0 (per-spec model/agent choice); Claude Code is the only v0 backend. Codex CLI, local models (e.g. quantized Qwen3-Coder) plug in later |
+| Build "success" (calibration signal) | Project checks pass **and** a PR opens — automatic, recorded per job |
+| Success probabilities | Hand-set prior per executor, auto-updated from real build outcomes (Beta update); shown on graph **nodes** (v1) |
+| Failed builds | Manual retry in v0 (inspect, relaunch with a different executor); no auto-escalation |
 | Spec bodies | Markdown files in the target repo are canonical; DB is a synced projection + metadata |
 | App data | Lives outside target repos (`~/.spindlegraph/`); never committed into a target repo |
 | Deployment | Local web app first; packaging (pipx/npx launcher, desktop) deferred to v2 |
@@ -41,6 +45,13 @@ via the headless CLI (`claude -p`), migrating to the Claude Agent SDK in v2.
   `modifies_files` intersect. Conflicting specs must not build in parallel.
 - **Wave** — a set of pairwise non-conflicting specs that can be built
   simultaneously in separate git worktrees.
+- **Executor** — a (backend, model) pair that can run a build: e.g.
+  Claude Code × Sonnet, Claude Code × Fable, later Codex CLI × GPT-5.5 or a
+  local harness × quantized Qwen3-Coder. Each spec build is assigned one.
+- **Success probability** — a per-node estimate of P(this spec builds
+  successfully with its assigned executor). Distinct from edge *weight*:
+  weight measures merge-conflict risk between two specs built in parallel;
+  probability measures whether one spec's build lands at all.
 - **Reconciliation** — the post-build pass that replaces a spec's *planned* file
   list with the *actual* git diff, re-derives the graph, and proposes edits to
   the remaining specs.
@@ -203,6 +214,21 @@ CREATE TABLE project (
   created_at    TEXT NOT NULL
 );
 
+CREATE TABLE executor (
+  id            INTEGER PRIMARY KEY,
+  name          TEXT NOT NULL UNIQUE,      -- "Sonnet", "Fable", "Qwen3-Coder (local)"
+  backend       TEXT NOT NULL,             -- claude_code (only v0 value) | codex_cli | local_oss …
+  model         TEXT,                      -- backend-specific model id (--model value for claude_code)
+  prior_success REAL NOT NULL DEFAULT 0.8, -- hand-set starting estimate, editable in GUI
+  prior_strength REAL NOT NULL DEFAULT 10, -- how many pseudo-builds the prior is worth
+  successes     INTEGER NOT NULL DEFAULT 0,-- real recorded outcomes (see §10)
+  failures      INTEGER NOT NULL DEFAULT 0,
+  enabled       INTEGER NOT NULL DEFAULT 1
+);
+-- Estimated P(success) = (prior_success·prior_strength + successes)
+--                        / (prior_strength + successes + failures)      [Beta mean]
+-- Calibration is global per executor in v1 (not per-project) — see D5.
+
 CREATE TABLE spec (
   id            INTEGER PRIMARY KEY,
   project_id    INTEGER NOT NULL REFERENCES project(id),
@@ -221,6 +247,7 @@ CREATE TABLE spec (
   decisions_json     TEXT NOT NULL DEFAULT '[]',
                 -- [{text, resolved, answer}]
   depends_on_json    TEXT NOT NULL DEFAULT '[]',  -- [spec_id], manual/proposed ordering
+  executor_id   INTEGER REFERENCES executor(id),  -- NULL → project default executor
   provenance_json    TEXT NOT NULL DEFAULT '{}',
                 -- {branch, commit, pr_url, built_at, job_id}
   updated_at    TEXT NOT NULL,
@@ -233,8 +260,7 @@ CREATE TABLE edge (            -- derived; wiped & recomputed per project on imp
   spec_b        INTEGER NOT NULL REFERENCES spec(id),
   shared_files_json TEXT NOT NULL,         -- [path]
   weight        REAL NOT NULL,             -- see §6
-  probability   REAL,                      -- NULL until v1 semantics land (§10)
-  overridden    INTEGER NOT NULL DEFAULT 0,-- user pinned weight/probability; survives recompute
+  overridden    INTEGER NOT NULL DEFAULT 0,-- user pinned weight; survives recompute
   PRIMARY KEY (project_id, spec_a, spec_b)
 );
 
@@ -245,6 +271,9 @@ CREATE TABLE job (
   spec_ids_json TEXT NOT NULL DEFAULT '[]',
   parent_job_id INTEGER REFERENCES job(id),-- build_batch spawns child build jobs
   status        TEXT NOT NULL,             -- queued | running | succeeded | failed | canceled
+  executor_id   INTEGER REFERENCES executor(id),
+  outcome       TEXT,                      -- build jobs only: success | failure per §10's
+                                           -- definition (checks passed + PR opened); feeds calibration
   command       TEXT NOT NULL,             -- the exact claude invocation, for audit
   worktree_path TEXT,
   branch        TEXT,
@@ -274,9 +303,9 @@ Spec records — no I/O — so it's trivially unit-testable.
     Chosen over Jaccard so a 2-file spec fully contained in a 40-file spec
     scores 1.0 (maximal conflict), not 0.05. Raw shared count is also returned
     for display.
-  - `probability = NULL` in v0. Semantics defined in v1 (§10).
-  - Edges the user has `overridden` keep their pinned values across recomputes
-    (shared_files still refresh).
+  - Edges the user has `overridden` keep their pinned weight across recomputes
+    (shared_files still refresh). Success *probabilities* are node-level, not
+    edge-level — see §10.
 - **Parallel-safe check** (batch composer): a selected set is safe iff it
   induces no conflict edges. The API returns the offending edges otherwise.
 - **Wave suggestion:** repeatedly extract a maximal independent set from the
@@ -295,7 +324,34 @@ Spec records — no I/O — so it's trivially unit-testable.
 
 ## 7. Orchestrator
 
-### Invocation contract
+### Executors
+
+Every build job runs under an **executor** — a named (backend, model) pair
+(see `executor` table, §5). The runner is written against a small interface:
+
+```python
+class Executor(Protocol):
+    def build_command(self, prompt: str, opts: JobOptions) -> list[str]  # argv
+    def parse_events(self, stdout_lines) -> Iterator[AgentEvent]          # normalize to one event shape
+```
+
+- **v0 ships exactly one backend, `claude_code`** — the invocation contract
+  below. Executors differing only by `model` (Sonnet, Opus, Fable, Haiku) are
+  just rows in the executor table; the GUI seeds sensible defaults.
+- Later backends (Codex CLI, a local-model harness for e.g. quantized
+  Qwen3-Coder) implement the same interface; their auth/endpoint config lives
+  on the executor row. Nothing else in the orchestrator changes — this is why
+  the interface exists in v0 even though only one backend does.
+- **Assignment:** each spec may pin an executor (`spec.executor_id`); unset
+  falls back to the project's default executor. The batch composer shows and
+  edits per-spec assignments before launch; the job records which executor
+  actually ran (`job.executor_id`).
+- **Failure handling (v0):** no auto-retry. A failed build keeps its worktree
+  and logs; the GUI offers "retry", pre-opening the executor picker so the
+  natural move — rerun with a stronger model — is one click. An auto-escalation
+  ladder is a possible v2 batch option, deliberately out of scope now.
+
+### Invocation contract (claude_code backend)
 
 All agent work is `claude -p` run as a subprocess **with `cwd` = the target
 repo** (or a worktree of it):
@@ -305,7 +361,7 @@ claude -p "<prompt>" \
   --output-format stream-json --verbose \
   --permission-mode acceptEdits \
   --allowedTools "<per-kind allowlist, see below>" \
-  [--model <per-project/per-job model>]
+  [--model <from the job's executor row>]
 ```
 
 - **stream-json** gives an NDJSON event stream on stdout; the runner parses
@@ -388,7 +444,10 @@ PATCH  /api/specs/{id}                      # edit body/status/decisions → wri
 GET    /api/projects/{id}/graph             # nodes + conflict/dependency edges
 PATCH  /api/edges/{a}/{b}                   # override weight/probability
 POST   /api/projects/{id}/graph/check       {spec_ids} → {safe, conflicts[], suggested_waves[][]}
-POST   /api/jobs                            {project_id, kind, spec_ids?, prompt?, options?}
+GET    /api/executors                       # roster incl. calibrated rates
+POST   /api/executors                       # add executor
+PATCH  /api/executors/{id}                  # edit prior/model/enabled
+POST   /api/jobs                            {project_id, kind, spec_ids?, prompt?, executor_id?, options?}
 GET    /api/jobs?project_id=…
 GET    /api/jobs/{id}                       # incl. log tail
 POST   /api/jobs/{id}/cancel
@@ -429,7 +488,7 @@ Exact command prose is authored during v0 implementation and reviewed like code.
 
 ---
 
-## 10. Reconciliation loop (v1)
+## 10. Reconciliation & success probabilities (v1)
 
 Trigger: a `build` job succeeds (or the user points at a merged PR/commit range).
 
@@ -447,12 +506,44 @@ Trigger: a `build` job succeeds (or the user points at a merged PR/commit range)
 4. **Review UI:** per stale spec, show proposal diff → Accept (write file,
    reimport, clear `stale`) / Reject (clear `stale`, keep file) / Edit-then-accept.
 
-The `probability` column gets real semantics here — **deliberately unspecified
-until the user's Substack post / agentic-engineering notes are shared** (they
-define what edge probabilities mean and which analyses — collision risk,
-optimal wave ordering, Monte-Carlo over orderings — operate on them). The v0
-schema just reserves the column and the GUI affordance to edit it.
-**Open decision D1, §17.**
+### Success probabilities
+
+Semantics (settled 2026-07-03, resolving old D1): probability is a **node
+property**, not an edge property. Each spec node displays
+**P(build succeeds | assigned executor)** so the user can assign models
+intelligently — strong/expensive executors where failure hurts, cheap/local
+ones where the work is easy or low-blast-radius.
+
+- **Success definition** (the calibration signal): a build counts as a
+  *success* iff the project's checks pass in the worktree **and** a PR is
+  opened (branch-only counts when the repo has no remote/`gh`). Recorded
+  automatically on `job.outcome` the moment the job ends. Agent-process
+  failures, timeouts, and cancellations count as *failure*; user-canceled jobs
+  count as nothing.
+- **Estimate**: Beta-mean per executor —
+  `P = (prior_success·prior_strength + successes) / (prior_strength + successes + failures)`.
+  The prior is hand-set per executor in the config panel (e.g. Fable 0.95,
+  local Qwen 0.60) and every recorded outcome moves the estimate toward
+  reality. Calibration is **global per executor** across projects in v1 (D5).
+- **Not perplexity-based** — deliberately. Model perplexity doesn't track
+  agentic build success (tool use, long-horizon planning, repo test friction
+  dominate). The estimator is pluggable, so a signal-derived prior
+  (benchmarks, perplexity) can be slotted in as an *initializer* later; the
+  empirical update stays the backbone.
+- **Difficulty scaling** (per-spec modifier: file count, `planned_new` files,
+  unresolved decisions shrink P) is a planned refinement, not in the first v1
+  cut — see D6.
+
+**Node × edge analyses** these unlock (v1, canvas overlays):
+
+- **Wave success**: P(all specs in a wave land) = Π node probabilities;
+  expected number of manual interventions per wave.
+- **Assignment advice**: flag high-degree/high-weight nodes carrying
+  low-probability executors — a failure there also skips its conflicting
+  neighbors (§7 wave rules), so its *effective* cost is amplified.
+- **Monte-Carlo over orderings**: sample build outcomes from node
+  probabilities across candidate wave orderings; report distribution of
+  completed-spec counts and expected retries per ordering; recommend one.
 
 ---
 
@@ -467,18 +558,22 @@ Single-page app, project switcher in the header. Views:
    affected-files list (planned vs actual once built).
 2. **Graph canvas** — React Flow. Nodes colored by status; conflict edges with
    thickness ∝ weight, hover shows shared files; dependency edges as arrows.
-   Selecting nodes drives the batch composer (below). Layout: dagre/ELK
-   auto-layout, positions not persisted in v0.
+   Node badge shows the assigned executor (and, from v1, its success
+   probability). Selecting nodes drives the batch composer (below). Layout:
+   dagre/ELK auto-layout, positions not persisted in v0.
 3. **Runner** — command palette: Triage (needs notes doc), New Spec (idea text
    box), Build (spec picker). Job list with live status; clicking a job opens
    the **log pane** streaming `job.log` events (rendered as: assistant text,
    tool calls collapsed to one line, result). Cancel button.
 4. **Batch composer** — multi-select specs (board or canvas); live safety
    check via `/graph/check`; canvas highlights conflicts in red and suggested
-   waves by hue; launch → build_batch job; wave progress + per-spec PR links.
-5. **Config** — global: claude binary path, default model, max_parallel;
-   per-project: model override, permission escalation toggle, default branch,
-   notes doc path.
+   waves by hue; per-spec **executor picker** in the launch review (defaults
+   shown, editable in place); launch → build_batch job; wave progress +
+   per-spec PR links.
+5. **Config** — global: claude binary path, max_parallel, and the **executor
+   roster** (add/edit executors, set priors; v1 shows each executor's live
+   calibrated rate and outcome counts); per-project: default executor,
+   permission escalation toggle, default branch, notes doc path.
 
 Non-goals for v0 GUI: auth, mobile, drag-to-create edges, spec creation by
 hand in the GUI (use /spec — hand-authoring bypasses grounding), graph position
@@ -514,7 +609,9 @@ Precedence: job options > project settings > global config > defaults.
 | Setting | Default | Scope |
 |---|---|---|
 | `claude_bin` | `claude` (PATH) | global |
-| `model` | CLI default | global / project / job |
+| executor roster (backends, models, priors) | seeded Claude models | global |
+| `default_executor` | Claude Code × CLI-default model | project |
+| executor assignment | project default | spec / job |
 | `max_parallel` | 3 | global / project |
 | `job_timeout_min` | 30 | global / project |
 | `permission_escalation` (`--dangerously-skip-permissions`) | off | project |
@@ -549,8 +646,9 @@ Done when this demo path works end-to-end:
 3. Graph canvas renders nodes + conflict edges with correct shared files.
 4. Run `/spec "<idea>"` from the Runner; live logs stream; the new spec file
    appears in the repo, auto-imports, and shows up on board + graph.
-5. Run a single `/build` on a worktree; logs stream; branch (and PR when `gh`
-   present) captured; spec flips to `built`.
+5. Run a single `/build` on a worktree with a chosen executor (Claude model
+   picker); logs stream; branch (and PR when `gh` present) captured; spec
+   flips to `built`; `job.outcome` recorded.
 6. Batch composer: select 3 specs where 2 conflict; safety check flags the
    pair; launch waves; two parallel worktree builds then the third; PR links
    listed.
@@ -561,8 +659,9 @@ Done when this demo path works end-to-end:
   get agent proposals, review UI applies/rejects. Acceptance: build a spec that
   deviates from plan → a conflicting spec goes stale → proposal shown → accept
   rewrites its file.
-- Probability semantics per the user's notes (D1); edge editing; at least the
-  collision-risk analysis rendered on the canvas.
+- Success probabilities live: outcomes recorded, executor rates calibrating,
+  node badges on the canvas, wave-success and assignment-advice overlays; edge
+  weight editing. Monte-Carlo over orderings may slip to late v1.
 
 ### v2 — local agent + polish
 
@@ -591,8 +690,9 @@ Done when this demo path works end-to-end:
 
 ## 17. Open decisions
 
-- **D1 — Edge probability semantics (v1).** Awaiting the user's Substack post /
-  agentic-engineering notes. Until then: column reserved, no analyses shipped.
+- **D1 — Probability semantics. RESOLVED 2026-07-03:** node-level
+  P(build succeeds | executor), calibrated from real outcomes — see §10. (The
+  user's Substack post may still refine the *analyses*; share when handy.)
 - **D2 — Default permission posture for headless builds.** Current spec:
   `acceptEdits` + per-kind allowlists, opt-in bypass. Needs validation against
   real builds early in v0 (allowlists may prove too brittle for arbitrary
@@ -604,3 +704,14 @@ Done when this demo path works end-to-end:
 - **D4 — Spec numbering collisions.** Two concurrent `/spec` jobs could both
   pick the next free `NNNN`. v0 mitigation: SpindleGraph serializes spec-kind
   jobs per project. Revisit if that's ever limiting.
+- **D5 — Calibration scope.** Executor success rates are global across
+  projects in v1 (more data, faster convergence) even though difficulty varies
+  by repo. Alternative: per-project rates, or global with per-project offsets.
+  Revisit once there's enough outcome data to see whether repos diverge.
+- **D6 — Difficulty scaling.** Per-spec modifiers on P (file count, new files,
+  unresolved decisions, LOC touched by conflicting built specs). Deferred past
+  the first v1 cut; needs outcome data to fit against, not guesses.
+- **D7 — Cost awareness.** Executors have very different costs (Fable vs a
+  local Qwen). Should the composer show estimated cost next to probability so
+  assignment is an explicit cost-vs-confidence tradeoff? Cheap to add once
+  token counts are captured from the stream; decide during v1.
