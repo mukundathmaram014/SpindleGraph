@@ -9,6 +9,10 @@ import { forceLayout } from './layout'
 
 const edgeTypes = { floating: FloatingEdge }
 
+// wave n gets a stable hue: ring color on canvas nodes = row group in composer
+export const WAVE_COLORS = ['var(--accent)', 'var(--wave2)', 'var(--warn)', '#a855f7']
+export const waveColor = (i: number) => WAVE_COLORS[i % WAVE_COLORS.length]
+
 export default function GraphView({ project, executors, specs, graphTick, refreshSpecs }: {
   project: Project
   executors: Executor[]
@@ -39,7 +43,8 @@ export default function GraphView({ project, executors, specs, graphTick, refres
   }, [project.id, selected, graphTick])
 
   const execOf = useCallback((executorId: number | null) =>
-    executors.find((e) => e.id === executorId), [executors])
+    executors.find((e) => e.id === executorId)
+    ?? executors.find((e) => e.enabled), [executors])
 
   // force layout: conflicting specs cluster, independent specs drift apart
   const positions = useMemo(() => forceLayout(
@@ -49,15 +54,34 @@ export default function GraphView({ project, executors, specs, graphTick, refres
 
   const [nodes, setNodes, onNodesChange] = useNodesState([])
 
+  // spec id -> wave index for the current selection's suggested waves
+  const waveOf = useMemo(() => {
+    const m = new Map<number, number>()
+    check?.waves.forEach((w, i) => w.forEach((id) => m.set(id, i)))
+    return m
+  }, [check])
+
   const buildNode = useCallback((n: GraphNode, position: { x: number; y: number }): Node => {
     const ex = execOf(n.executor_id)
     const isSel = selected.includes(n.id)
+    const wave = isSel ? waveOf.get(n.id) : undefined
+    const ring = wave !== undefined ? waveColor(wave) : undefined
     return {
       id: String(n.id),
       position,
       data: {
         label: (
-          <div className={`sgnode ${isSel ? 'sel' : ''} ${n.status}`}>
+          <div
+            className={`sgnode ${isSel ? 'sel' : ''} ${n.status}`}
+            data-wave={wave}
+            style={ring ? {
+              borderColor: ring,
+              boxShadow: `0 0 0 3px color-mix(in srgb, ${ring} 28%, transparent)`,
+            } : undefined}
+          >
+            {wave !== undefined && (
+              <span className="wavetag" style={{ background: ring }}>W{wave + 1}</span>
+            )}
             <div className="t">#{String(n.number).padStart(4, '0')} {n.slug}</div>
             <div className="sub">
               <span className={`pill ${n.status}`}>{n.status}</span>{' '}
@@ -65,14 +89,15 @@ export default function GraphView({ project, executors, specs, graphTick, refres
               {n.unresolved_decisions > 0 && ` · ${n.unresolved_decisions}❓`}
             </div>
             <div className="sub">
-              {ex ? `${ex.name} · P ${ex.estimated_success.toFixed(2)} · ${fmt$(ex.avg_build_cost_usd)}` : 'default executor'}
+              {ex ? `${ex.name} · P ${ex.estimated_success.toFixed(2)} · ${fmt$(ex.avg_build_cost_usd)}`
+                : 'default executor'}
             </div>
           </div>
         ),
       },
       style: { background: 'transparent', border: 'none', padding: 0, width: 'auto' },
     }
-  }, [execOf, selected])
+  }, [execOf, selected, waveOf])
 
   // rebuild node contents on data/selection changes, but keep dragged positions
   useEffect(() => {
@@ -149,6 +174,11 @@ export default function GraphView({ project, executors, specs, graphTick, refres
                 (thicker = more overlap; hover for the files)</span>
               <span><i className="key-sel" /> selected for the batch — click nodes to
                 toggle; distance ≈ independence</span>
+              <span>
+                <i className="waveswatch" style={{ background: waveColor(0) }} />W1{' '}
+                <i className="waveswatch" style={{ background: waveColor(1) }} />W2 —
+                ring color = suggested wave (waves run one after another)
+              </span>
               <span>
                 drag to rearrange ·{' '}
                 <button className="linklike" onClick={relayout}>↺ re-layout</button>
@@ -232,11 +262,16 @@ function WaveRows({ wave, wi, byId, specById, executors, refreshSpecs }: {
 }) {
   return (
     <>
-      <tr><td colSpan={5} className="wavehdr">Wave {wi + 1}</td></tr>
+      <tr><td colSpan={5} className="wavehdr" style={{ color: waveColor(wi) }}>
+        <span className="waveswatch" style={{ background: waveColor(wi) }} />
+        Wave {wi + 1}
+      </td></tr>
       {wave.map((id) => {
         const n = byId(id)
         const s = specById(id)
+        // unset executor falls back to the first enabled one (matches backend)
         const ex = executors.find((e) => e.id === s?.executor_id)
+          ?? executors.find((e) => e.enabled)
         return (
           <tr key={id}>
             <td className="mono">#{n ? String(n.number).padStart(4, '0') : id}</td>

@@ -22,13 +22,19 @@ export default function App() {
   const [health, setHealth] = useState<Health | null>(null)
   const [adding, setAdding] = useState(false)
   const [graphTick, setGraphTick] = useState(0)
+  const [loadError, setLoadError] = useState('')
 
   const project = projects?.find((p) => p.id === projectId) ?? null
 
   const loadProjects = useCallback(async () => {
-    const ps = await api.projects()
-    setProjects(ps)
-    if (ps.length && !ps.some((p) => p.id === projectId)) setProjectId(ps[0].id)
+    try {
+      const ps = await api.projects()
+      setProjects(ps)
+      setLoadError('')
+      if (ps.length && !ps.some((p) => p.id === projectId)) setProjectId(ps[0].id)
+    } catch (e) {
+      setLoadError(e instanceof Error ? e.message : String(e))
+    }
   }, [projectId])
 
   const loadSpecs = useCallback(async () => {
@@ -53,7 +59,18 @@ export default function App() {
     if (e.type === 'job.updated') void loadExecutors()
   })
 
-  if (projects === null) return <div className="empty">Loading…</div>
+  if (projects === null) {
+    return (
+      <div className="empty" style={{ display: 'grid', gap: 10, placeContent: 'center', height: '100%' }}>
+        {loadError ? (
+          <>
+            <div className="error-banner">Can't reach the SpindleGraph backend: {loadError}</div>
+            <button onClick={loadProjects}>Retry</button>
+          </>
+        ) : 'Loading…'}
+      </div>
+    )
+  }
 
   if (!projects.length || adding) {
     return (

@@ -75,3 +75,15 @@ Integration tests drive a real git fixture repo through
 `tests/fake_claude.py`, a stand-in that emits canned `stream-json` events — no
 credentials needed. Point `claude binary` in Config at
 `python backend/tests/fake_claude.py` to demo the whole app offline.
+
+### End-to-end (browser)
+
+```sh
+cd frontend && npm run build && npx playwright test
+```
+
+Playwright boots a private backend on :8788 with a generated demo repo and the
+fake CLI, then drives the real UI through the whole demo path: onboarding,
+decision resolution, graph clusters, node dragging, wave-colored batch launch,
+live log streaming, and executor calibration. Screenshots land in
+`frontend/e2e-artifacts/`.
