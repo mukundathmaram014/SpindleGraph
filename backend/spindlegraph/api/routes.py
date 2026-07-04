@@ -445,7 +445,8 @@ async def create_job(body: JobCreate):
                     409, f"spec has {len(unresolved)} unresolved decision(s)")
             job = manager.create_job(
                 conn, proj["id"], "build", [spec["id"]],
-                executor_id=body.executor_id or spec["executor_id"],
+                executor_id=body.executor_id or spec["executor_id"]
+                or manager.default_executor_id(conn, proj),
                 prompt=f"/build {spec['file_path']}")
         elif kind == "build_batch":
             if not body.spec_ids:

@@ -54,6 +54,19 @@ class JobManager:
                                  "job": self.job_dict(conn, job_id)})
 
     @staticmethod
+    def default_executor_id(conn: sqlite3.Connection, project_row) -> int | None:
+        """SPEC §7: unset executor falls back to the project default, then to
+        the first enabled executor (so outcomes are always attributable)."""
+        settings = json.loads(project_row["settings_json"] or "{}")
+        did = settings.get("default_executor_id")
+        if did and conn.execute("SELECT 1 FROM executor WHERE id=? AND enabled=1",
+                                (did,)).fetchone():
+            return did
+        row = conn.execute(
+            "SELECT id FROM executor WHERE enabled=1 ORDER BY id LIMIT 1").fetchone()
+        return row["id"] if row else None
+
+    @staticmethod
     def _executor_row(conn: sqlite3.Connection, executor_id: int | None) -> dict | None:
         if executor_id is None:
             return None
@@ -340,7 +353,8 @@ class JobManager:
                     continue
                 child = self.create_job(
                     conn, proj["id"], "build", [sid],
-                    executor_id=srow["executor_id"],
+                    executor_id=srow["executor_id"]
+                    or self.default_executor_id(conn, proj),
                     prompt=f"/build {srow['file_path']}",
                     parent_job_id=job["id"])
                 self.launch(child["id"])

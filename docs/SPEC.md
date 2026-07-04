@@ -100,17 +100,19 @@ conflict edges (undirected, weighted) and dependency edges (directed).
 backend/
   spindlegraph/
     main.py            # FastAPI app factory, static serving, WS
-    db.py              # SQLite setup, migrations
-    models.py          # Pydantic + table definitions
+    config.py          # state dir (~/.spindlegraph) + global config
+    db.py              # SQLite schema, seeds, helpers
+    events.py          # project-scoped event bus feeding the WS
     importer.py        # specs/*.md ⇄ Spec records
     graph.py           # edge derivation, waves, independent sets
     orchestrator/
-      runner.py        # claude -p subprocess management
-      worktrees.py     # git worktree lifecycle
-      jobs.py          # job state machine, log fan-out
+      executors.py     # executor → argv, P estimate, cost math
+      worktrees.py     # git worktree lifecycle + command sync
+      jobs.py          # job state machine, runner, log fan-out
     reconcile.py       # v1
-    api/               # routers: projects, specs, graph, jobs, ws
-  pyproject.toml       # managed with uv
+    api/routes.py      # REST routers (request models inline)
+  requirements.txt     # plain venv + pip
+  tests/               # unit + integration (fake_claude.py stands in for the CLI)
 frontend/
   src/                 # React + TS: board, canvas, runner, composer, config
   package.json
@@ -199,8 +201,8 @@ Parsing is tolerant — hand-written specs predate SpindleGraph:
 
 ## 5. Data model (SQLite)
 
-JSON columns are TEXT with JSON content; SQLite is accessed via SQLAlchemy Core
-(no ORM ceremony), with `PRAGMA foreign_keys=ON` and WAL mode.
+JSON columns are TEXT with JSON content; SQLite is accessed via the stdlib
+`sqlite3` module (no ORM), with `PRAGMA foreign_keys=ON` and WAL mode.
 
 ```sql
 CREATE TABLE project (
