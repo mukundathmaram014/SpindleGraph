@@ -10,7 +10,12 @@ per-executor success probability and cost.
 It is **not** a Claude Code plugin — it's a separate app that drives Claude
 Code from the outside via the headless CLI (`claude -p`).
 
-Full product & technical spec: [`docs/SPEC.md`](docs/SPEC.md).
+**Docs:**
+
+- [`docs/USER-GUIDE.md`](docs/USER-GUIDE.md) — how to use it, tab by tab, with the full workflow loop
+- [`docs/ARCHITECTURE.md`](docs/ARCHITECTURE.md) — the system as built: components, data flow, job lifecycle
+- [`docs/DEVELOPMENT.md`](docs/DEVELOPMENT.md) — dev loop, test suites, conventions, adding executor backends
+- [`docs/SPEC.md`](docs/SPEC.md) — the design record: decisions, rationale, milestones
 
 ## Prerequisites
 
