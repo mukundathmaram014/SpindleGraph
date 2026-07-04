@@ -151,6 +151,32 @@ export default function GraphView({ project, executors, specs, graphTick, refres
     .map((id) => specById(id))
     .filter((s): s is Spec => !!s && s.decisions.some((d) => !d.resolved))
 
+  // node-level success probability (v1): each spec inherits its executor's rate.
+  const execOfSpec = (id: number) => {
+    const s = specById(id)
+    return executors.find((e) => e.id === s?.executor_id)
+      ?? executors.find((e) => e.enabled)
+  }
+  const pOf = (id: number) => execOfSpec(id)?.estimated_success ?? 1
+  const batchP = selected.reduce((acc, id) => acc * pOf(id), 1)
+  const batchE = selected.reduce((sum, id) => {
+    const c = expectedCost(execOfSpec(id))
+    return c == null ? sum : sum + c
+  }, 0)
+  const expectedRetries = selected.reduce((s, id) => s + (1 - pOf(id)), 0)
+  // assignment advice: a low-P spec that conflicts with others amplifies its
+  // cost — a failure there skips its conflicting neighbours (§7 wave rules).
+  const advice = check
+    ? selected
+        .map((id) => ({
+          id,
+          degree: check.conflicts.filter((c) => c.spec_a === id || c.spec_b === id).length,
+          p: pOf(id),
+        }))
+        .filter((x) => x.degree >= 1 && x.p < 0.8)
+        .sort((a, b) => b.degree - a.degree || a.p - b.p)
+    : []
+
   return (
     <div className="graphwrap">
       <div className="panel" style={{ overflow: 'hidden' }}>
@@ -217,6 +243,13 @@ export default function GraphView({ project, executors, specs, graphTick, refres
                 ❓ unresolved decisions block: {blockers.map((s) => `#${s.number}`).join(', ')}
               </div>
             )}
+            {advice.map((a) => (
+              <div className="conflict-note advice" key={a.id}>
+                ◆ #{byId(a.id)?.number} carries P {a.p.toFixed(2)} and conflicts with{' '}
+                {a.degree} spec{a.degree > 1 ? 's' : ''} — a failure here skips them;
+                consider a stronger executor.
+              </div>
+            ))}
             <table>
               <thead>
                 <tr><th>Spec</th><th>Executor</th><th>P</th><th>est $</th><th>E[$]</th></tr>
@@ -224,7 +257,7 @@ export default function GraphView({ project, executors, specs, graphTick, refres
               <tbody>
                 {check.waves.map((wave, wi) => (
                   <WaveRows key={wi} wave={wave} wi={wi} byId={byId}
-                    specById={specById} executors={executors}
+                    specById={specById} executors={executors} pOf={pOf}
                     refreshSpecs={refreshSpecs} />
                 ))}
               </tbody>
@@ -237,6 +270,12 @@ export default function GraphView({ project, executors, specs, graphTick, refres
               <span style={{ color: 'var(--muted)', fontSize: 12 }}>
                 {selected.length} spec(s) · one worktree + PR each
               </span>
+            </div>
+            <div className="batch-summary">
+              <span>P(all {selected.length} land){' '}
+                <b style={{ color: 'var(--accent)' }}>{Math.round(batchP * 100)}%</b></span>
+              <span>· expected retries ≈ {expectedRetries.toFixed(1)}</span>
+              <span>· E[$ to success] {fmt$(batchE)}</span>
             </div>
             {check.waves.length > 1 && (
               <p style={{ color: 'var(--muted)', fontSize: 12 }}>
@@ -252,19 +291,24 @@ export default function GraphView({ project, executors, specs, graphTick, refres
   )
 }
 
-function WaveRows({ wave, wi, byId, specById, executors, refreshSpecs }: {
+function WaveRows({ wave, wi, byId, specById, executors, refreshSpecs, pOf }: {
   wave: number[]
   wi: number
   byId: (id: number) => { number: number; slug: string } | undefined
   specById: (id: number) => Spec | undefined
   executors: Executor[]
   refreshSpecs: () => Promise<void>
+  pOf: (id: number) => number
 }) {
+  const waveP = wave.reduce((a, id) => a * pOf(id), 1)
   return (
     <>
       <tr><td colSpan={5} className="wavehdr" style={{ color: waveColor(wi) }}>
         <span className="waveswatch" style={{ background: waveColor(wi) }} />
         Wave {wi + 1}
+        <span style={{ float: 'right', color: 'var(--muted)', fontWeight: 600 }}>
+          P(all land) {waveP.toFixed(2)}
+        </span>
       </td></tr>
       {wave.map((id) => {
         const n = byId(id)

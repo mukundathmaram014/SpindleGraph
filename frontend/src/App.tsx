@@ -1,11 +1,12 @@
 import { useCallback, useEffect, useState } from 'react'
-import { api, type Executor, type Health, type Project, type Spec } from './api'
+import { api, type Executor, type Health, type Project, type Proposal, type Spec } from './api'
 import { useProjectEvents } from './ws'
 import Board from './views/Board'
 import GraphView from './views/GraphView'
 import Runner from './views/Runner'
 import Config from './views/Config'
 import AddProject from './views/AddProject'
+import Reconcile from './views/Reconcile'
 
 const TABS = ['Board', 'Graph', 'Runner', 'Config'] as const
 type Tab = (typeof TABS)[number]
@@ -19,6 +20,8 @@ export default function App() {
   const [tab, setTab] = useState<Tab>('Board')
   const [specs, setSpecs] = useState<Spec[]>([])
   const [executors, setExecutors] = useState<Executor[]>([])
+  const [proposals, setProposals] = useState<Proposal[]>([])
+  const [reviewing, setReviewing] = useState(false)
   const [health, setHealth] = useState<Health | null>(null)
   const [adding, setAdding] = useState(false)
   const [graphTick, setGraphTick] = useState(0)
@@ -45,16 +48,22 @@ export default function App() {
     setExecutors(await api.executors())
   }, [])
 
+  const loadProposals = useCallback(async () => {
+    if (projectId != null) setProposals(await api.proposals(projectId))
+  }, [projectId])
+
   useEffect(() => { void loadProjects() }, [loadProjects])
   useEffect(() => { void loadSpecs() }, [loadSpecs])
   useEffect(() => { void loadExecutors() }, [loadExecutors])
+  useEffect(() => { void loadProposals() }, [loadProposals])
   useEffect(() => { api.health().then(setHealth).catch(() => setHealth(null)) }, [])
   useEffect(() => {
     if (projectId != null) localStorage.setItem('sg.project', String(projectId))
   }, [projectId])
 
   useProjectEvents(projectId, (e) => {
-    if (e.type === 'specs.updated') void loadSpecs()
+    if (e.type === 'specs.updated') { void loadSpecs(); void loadProposals() }
+    if (e.type === 'proposals.updated') void loadProposals()
     if (e.type === 'graph.updated') setGraphTick((t) => t + 1)
     if (e.type === 'job.updated') void loadExecutors()
   })
@@ -107,6 +116,12 @@ export default function App() {
           ))}
         </nav>
         <div className="right">
+          {proposals.length > 0 && (
+            <button className="reconcile-badge" onClick={() => setReviewing(true)}
+              title="Specs went stale after a build — review proposed updates">
+              ⟳ Reconcile {proposals.length}
+            </button>
+          )}
           {health && !health.claude_path && (
             <span style={{ color: 'var(--bad)' }}>claude CLI not found</span>
           )}
@@ -129,6 +144,17 @@ export default function App() {
             refreshExecutors={loadExecutors} refreshProjects={loadProjects} />
         )}
       </main>
+      {reviewing && (
+        <Reconcile
+          proposals={proposals}
+          onClose={() => setReviewing(false)}
+          onResolved={async () => {
+            await loadProposals()
+            await loadSpecs()
+            setGraphTick((t) => t + 1)
+          }}
+        />
+      )}
     </div>
   )
 }

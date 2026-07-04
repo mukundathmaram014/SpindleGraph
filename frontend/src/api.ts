@@ -43,6 +43,13 @@ export interface CheckResult {
   waves: number[][];
 }
 export interface Health { claude_path: string | null; claude_version: string | null; gh: boolean }
+export interface Proposal {
+  id: number; project_id: number; spec_id: number; trigger_spec_id: number | null;
+  job_id: number | null; prior_status: string; proposed_body: string;
+  no_change: number; status: string; created_at: string;
+  spec_number?: number; spec_slug?: string; spec_title?: string; spec_status?: string;
+  current_body?: string; trigger_number?: number; trigger_title?: string;
+}
 
 async function req<T>(method: string, url: string, body?: unknown): Promise<T> {
   const r = await fetch(url, {
@@ -83,6 +90,10 @@ export const api = {
   job: (id: number) => req<Job>('GET', `/api/jobs/${id}`),
   createJob: (body: Record<string, any>) => req<Job>('POST', '/api/jobs', body),
   cancelJob: (id: number) => req('POST', `/api/jobs/${id}/cancel`),
+  proposals: (pid: number) =>
+    req<Proposal[]>('GET', `/api/projects/${pid}/proposals`),
+  acceptProposal: (id: number) => req<Spec>('POST', `/api/proposals/${id}/accept`),
+  rejectProposal: (id: number) => req('POST', `/api/proposals/${id}/reject`),
 }
 
 export function estCost(e: Executor | undefined): number | null {
