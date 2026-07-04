@@ -1,0 +1,117 @@
+import { useCallback, useEffect, useState } from 'react'
+import { api, type Executor, type Health, type Project, type Spec } from './api'
+import { useProjectEvents } from './ws'
+import Board from './views/Board'
+import GraphView from './views/GraphView'
+import Runner from './views/Runner'
+import Config from './views/Config'
+import AddProject from './views/AddProject'
+
+const TABS = ['Board', 'Graph', 'Runner', 'Config'] as const
+type Tab = (typeof TABS)[number]
+
+export default function App() {
+  const [projects, setProjects] = useState<Project[] | null>(null)
+  const [projectId, setProjectId] = useState<number | null>(() => {
+    const v = localStorage.getItem('sg.project')
+    return v ? Number(v) : null
+  })
+  const [tab, setTab] = useState<Tab>('Board')
+  const [specs, setSpecs] = useState<Spec[]>([])
+  const [executors, setExecutors] = useState<Executor[]>([])
+  const [health, setHealth] = useState<Health | null>(null)
+  const [adding, setAdding] = useState(false)
+  const [graphTick, setGraphTick] = useState(0)
+
+  const project = projects?.find((p) => p.id === projectId) ?? null
+
+  const loadProjects = useCallback(async () => {
+    const ps = await api.projects()
+    setProjects(ps)
+    if (ps.length && !ps.some((p) => p.id === projectId)) setProjectId(ps[0].id)
+  }, [projectId])
+
+  const loadSpecs = useCallback(async () => {
+    if (projectId != null) setSpecs(await api.specs(projectId))
+  }, [projectId])
+
+  const loadExecutors = useCallback(async () => {
+    setExecutors(await api.executors())
+  }, [])
+
+  useEffect(() => { void loadProjects() }, [loadProjects])
+  useEffect(() => { void loadSpecs() }, [loadSpecs])
+  useEffect(() => { void loadExecutors() }, [loadExecutors])
+  useEffect(() => { api.health().then(setHealth).catch(() => setHealth(null)) }, [])
+  useEffect(() => {
+    if (projectId != null) localStorage.setItem('sg.project', String(projectId))
+  }, [projectId])
+
+  useProjectEvents(projectId, (e) => {
+    if (e.type === 'specs.updated') void loadSpecs()
+    if (e.type === 'graph.updated') setGraphTick((t) => t + 1)
+    if (e.type === 'job.updated') void loadExecutors()
+  })
+
+  if (projects === null) return <div className="empty">Loading…</div>
+
+  if (!projects.length || adding) {
+    return (
+      <AddProject
+        onDone={async (p) => {
+          await loadProjects()
+          if (p) setProjectId(p.id)
+          setAdding(false)
+        }}
+        cancellable={projects.length > 0}
+      />
+    )
+  }
+
+  return (
+    <div className="shell">
+      <header className="appbar">
+        <div className="logo">Spindle<span>Graph</span></div>
+        <select
+          value={projectId ?? ''}
+          onChange={(e) => setProjectId(Number(e.target.value))}
+          aria-label="Project"
+        >
+          {projects.map((p) => (
+            <option key={p.id} value={p.id}>{p.name}</option>
+          ))}
+        </select>
+        <button onClick={() => setAdding(true)}>+ Add project</button>
+        <nav>
+          {TABS.map((t) => (
+            <button key={t} className={t === tab ? 'active' : ''} onClick={() => setTab(t)}>
+              {t}
+            </button>
+          ))}
+        </nav>
+        <div className="right">
+          {health && !health.claude_path && (
+            <span style={{ color: 'var(--bad)' }}>claude CLI not found</span>
+          )}
+          {health?.claude_version && <span className="mono">{health.claude_version}</span>}
+        </div>
+      </header>
+      <main className="main">
+        {project && tab === 'Board' && (
+          <Board project={project} specs={specs} executors={executors} refresh={loadSpecs} />
+        )}
+        {project && tab === 'Graph' && (
+          <GraphView project={project} executors={executors} specs={specs}
+            graphTick={graphTick} refreshSpecs={loadSpecs} />
+        )}
+        {project && tab === 'Runner' && (
+          <Runner project={project} specs={specs} executors={executors} />
+        )}
+        {project && tab === 'Config' && (
+          <Config project={project} executors={executors}
+            refreshExecutors={loadExecutors} refreshProjects={loadProjects} />
+        )}
+      </main>
+    </div>
+  )
+}
