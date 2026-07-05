@@ -213,3 +213,14 @@ def test_clean_exit_without_commit_is_failure(client, git_repo, monkeypatch):
     assert "without committing" in job["error"]
     assert Path(job["worktree_path"]).exists()   # work preserved
     assert spec_by_number(client, proj["id"], 9)["status"] == "decided"
+
+
+def test_explicit_status_patch_overrides_built_preservation(client, git_repo):
+    proj = add_project(client, git_repo)
+    s9 = spec_by_number(client, proj["id"], 9)
+    r = client.post("/api/jobs", json={"project_id": proj["id"], "kind": "build",
+                                       "spec_ids": [s9["id"]]})
+    wait_job(client, r.json()["id"])
+    assert spec_by_number(client, proj["id"], 9)["status"] == "built"
+    client.patch(f"/api/specs/{s9['id']}", json={"status": "decided"})
+    assert spec_by_number(client, proj["id"], 9)["status"] == "decided"

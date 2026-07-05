@@ -260,6 +260,12 @@ def patch_spec(spec_id: int, body: SpecPatch):
                          (json.dumps(body.depends_on), spec_id))
         conn.commit()
         importer.import_project(conn, spec["project_id"])
+        if body.status is not None:
+            # an explicit user status change outranks the importer's
+            # built/stale preservation heuristic
+            conn.execute("UPDATE spec SET status=?, updated_at=? WHERE id=?",
+                         (body.status, dbm.now(), spec_id))
+            conn.commit()
         bus.publish(spec["project_id"], {"type": "specs.updated"})
         bus.publish(spec["project_id"], {"type": "graph.updated"})
         return _spec_dict(_get_spec(conn, spec_id))
