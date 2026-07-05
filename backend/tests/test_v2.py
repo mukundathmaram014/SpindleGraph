@@ -197,3 +197,19 @@ def test_allowed_tools_passed_to_cli(state_home):
     # escalation drops the allowlist (bypass covers everything)
     argv2 = exm.build_argv(None, "p", cfg, escalate=True)
     assert "--allowedTools" not in argv2 and "--dangerously-skip-permissions" in argv2
+
+
+def test_clean_exit_without_commit_is_failure(client, git_repo, monkeypatch):
+    """Regression: an agent that exits 0 but never commits (e.g. blocked on
+    permissions) used to count as success — and the success-path cleanup
+    destroyed its uncommitted worktree."""
+    monkeypatch.setenv("FAKE_CLAUDE_NO_COMMIT", "1")
+    proj = add_project(client, git_repo)
+    s9 = spec_by_number(client, proj["id"], 9)
+    r = client.post("/api/jobs", json={"project_id": proj["id"], "kind": "build",
+                                       "spec_ids": [s9["id"]]})
+    job = wait_job(client, r.json()["id"])
+    assert job["status"] == "failed"
+    assert "without committing" in job["error"]
+    assert Path(job["worktree_path"]).exists()   # work preserved
+    assert spec_by_number(client, proj["id"], 9)["status"] == "decided"

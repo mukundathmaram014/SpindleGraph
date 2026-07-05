@@ -416,6 +416,22 @@ class JobManager:
         jrow = self.job_dict(conn, job["id"])
         actual: list[dict] = []
         if success:
+            # /build contract: at least one commit on the branch. An agent
+            # that exits cleanly WITHOUT committing (e.g. blocked, or just
+            # reporting) is not a successful build — and deleting its
+            # worktree would destroy uncommitted work.
+            code_c, out_c = wt.run_git(
+                ["rev-list", "--count", f"{proj['default_branch']}..HEAD"],
+                Path(jrow["worktree_path"]))
+            if code_c != 0 or not out_c.strip().isdigit() or int(out_c) == 0:
+                success = False
+                conn.execute(
+                    "UPDATE job SET status='failed', outcome='failure', error=?"
+                    " WHERE id=?",
+                    ("agent finished without committing — see its final report"
+                     f" in the log; worktree kept at {jrow['worktree_path']}",
+                     job["id"]))
+        if success:
             provenance = {"branch": jrow.get("branch"), "pr_url": jrow.get("pr_url"),
                           "built_at": dbm.now(), "job_id": job["id"]}
             actual = reconcile.capture_actual_files(

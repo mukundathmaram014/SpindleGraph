@@ -53,8 +53,9 @@ def main():
             tp.parent.mkdir(parents=True, exist_ok=True)
             with tp.open("a", encoding="utf-8") as fh:
                 fh.write("# touched by fake build\n")
-        subprocess.run(["git", "add", "-A"], check=True)
-        subprocess.run(["git", "commit", "-q", "-m", f"{slug}: fake build"], check=True)
+        if not os.environ.get("FAKE_CLAUDE_NO_COMMIT"):
+            subprocess.run(["git", "add", "-A"], check=True)
+            subprocess.run(["git", "commit", "-q", "-m", f"{slug}: fake build"], check=True)
         emit({"type": "assistant", "message": {
             "content": [{"type": "text", "text": f"Implemented {slug}; checks pass."}]}})
         pr = 100 + sum(ord(c) for c in slug) % 900
