@@ -1,0 +1,30 @@
+[32mINFO[0m:     Started server process [[36m29712[0m]
+[32mINFO[0m:     Waiting for application startup.
+[32mINFO[0m:     Application startup complete.
+[32mINFO[0m:     Uvicorn running on [1mhttp://127.0.0.1:8787[0m (Press CTRL+C to quit)
+[32mINFO[0m:     127.0.0.1:58042 - "WebSocket /ws/projects/1" [accepted]
+[32mINFO[0m:     connection open
+[32mINFO[0m:     127.0.0.1:65311 - "WebSocket /ws/projects/1" [accepted]
+[32mINFO[0m:     connection open
+[32mINFO[0m:     127.0.0.1:53164 - "WebSocket /ws/projects/1" [accepted]
+[32mINFO[0m:     connection open
+[32mINFO[0m:     127.0.0.1:61255 - "WebSocket /ws/projects/1" [accepted]
+[32mINFO[0m:     connection open
+[32mINFO[0m:     connection closed
+[32mINFO[0m:     127.0.0.1:50532 - "WebSocket /ws/projects/1" [accepted]
+[32mINFO[0m:     connection open
+[32mINFO[0m:     connection closed
+[32mINFO[0m:     127.0.0.1:50879 - "WebSocket /ws/projects/1" [accepted]
+[32mINFO[0m:     connection open
+[32mINFO[0m:     127.0.0.1:52279 - "WebSocket /ws/projects/1" [accepted]
+[32mINFO[0m:     connection open
+[32mINFO[0m:     connection closed
+[32mINFO[0m:     connection closed
+[32mINFO[0m:     connection closed
+[32mINFO[0m:     connection closed
+[32mINFO[0m:     127.0.0.1:63360 - "WebSocket /ws/projects/2" [accepted]
+[32mINFO[0m:     connection closed
+[32mINFO[0m:     connection open
+[32mINFO[0m:     127.0.0.1:53417 - "WebSocket /ws/projects/2" [accepted]
+[32mINFO[0m:     connection open
+[32mINFO[0m:     connection closed

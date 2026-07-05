@@ -1,4 +1,5 @@
 """v2: risk parsing + ordering, executor backends, project delete."""
+import json
 import sys
 import types
 from pathlib import Path
@@ -96,6 +97,24 @@ def test_local_cli_backend_build(client, git_repo):
                for e in events)
     ex = next(e for e in client.get("/api/executors").json() if e["id"] == exec_id)
     assert ex["successes"] == 1
+
+
+def test_large_stream_lines_survive(client, git_repo, monkeypatch):
+    """Real claude events can exceed asyncio's default 64KB readline limit
+    (one Read result = whole file in one JSON line). Regression: this used to
+    kill the reader with 'Separator is found, but chunk is longer than limit'
+    and leave the job failed."""
+    monkeypatch.setenv("FAKE_CLAUDE_BIGLINE", "1")
+    proj = add_project(client, git_repo)
+    s9 = spec_by_number(client, proj["id"], 9)
+    r = client.post("/api/jobs", json={"project_id": proj["id"], "kind": "build",
+                                       "spec_ids": [s9["id"]]})
+    job = wait_job(client, r.json()["id"])
+    assert job["status"] == "succeeded", job
+    events = client.get(f"/api/jobs/{job['id']}").json()["log_events"]
+    big = [e for e in events if e.get("type") == "assistant"
+           and len(json.dumps(e)) > 200_000]
+    assert big, "large event should have streamed through intact"
 
 
 def test_executor_backend_validation(client):

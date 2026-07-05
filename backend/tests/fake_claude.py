@@ -39,6 +39,11 @@ def main():
     if prompt.startswith("/build"):
         spec_rel = prompt.split(None, 1)[1].strip()
         slug = Path(spec_rel).stem
+        if os.environ.get("FAKE_CLAUDE_BIGLINE"):
+            # one huge single-line event, like a Read tool result embedding a
+            # large file — regression for the 64KB asyncio readline limit
+            emit({"type": "assistant", "message": {"content": [
+                {"type": "text", "text": "x" * 300_000}]}})
         Path(f"built_{slug}.txt").write_text("built\n", encoding="utf-8")
         # optional deviation from the plan: also modify a nominated file so the
         # actual diff differs from Affected files (exercises reconciliation).

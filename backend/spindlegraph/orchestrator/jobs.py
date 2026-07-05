@@ -212,7 +212,11 @@ class JobManager:
         try:
             proc = await asyncio.create_subprocess_exec(
                 *argv, cwd=str(cwd),
-                stdout=asyncio.subprocess.PIPE, stderr=asyncio.subprocess.PIPE)
+                stdout=asyncio.subprocess.PIPE, stderr=asyncio.subprocess.PIPE,
+                # stream-json lines carry whole file contents inside tool
+                # results; asyncio's default 64KB readline limit is far too
+                # small ("Separator is found, but chunk is longer than limit")
+                limit=64 * 1024 * 1024)
         except (OSError, FileNotFoundError) as e:
             conn.execute("UPDATE job SET status='failed', error=?, finished_at=? WHERE id=?",
                          (f"failed to start: {e}", dbm.now(), job_id))
@@ -229,12 +233,17 @@ class JobManager:
                 handle_line(line.decode("utf-8", errors="replace"), name)
 
         timeout_s = float(cfg.get("job_timeout_min", 30)) * 60
+        pump_error: str | None = None
         try:
             await asyncio.wait_for(
                 asyncio.gather(pump(proc.stdout, "stdout"), pump(proc.stderr, "stderr")),
                 timeout=timeout_s)
         except asyncio.TimeoutError:
             timed_out = True
+            _kill_tree(proc)
+        except Exception as e:
+            # a reader failure must never leave the agent running orphaned
+            pump_error = f"stream reader failed: {type(e).__name__}: {e}"
             _kill_tree(proc)
         code = await proc.wait()
         self._procs.pop(job_id, None)
@@ -244,13 +253,16 @@ class JobManager:
         if row and row["status"] == "canceled":
             return False
 
-        success = code == 0 and not state["is_error"] and not timed_out
+        success = (code == 0 and not state["is_error"] and not timed_out
+                   and pump_error is None)
         cost = state["total_cost_usd"]
         if cost is None:
             cost = ex.compute_cost(state["usage"], executor)
         error = None
         if timed_out:
             error = f"timed out after {int(timeout_s)}s"
+        elif pump_error:
+            error = pump_error
         elif not success:
             error = (state["result_text"] or f"exit code {code}")[:2000]
         conn.execute(
