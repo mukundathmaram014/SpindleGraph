@@ -153,6 +153,15 @@ class JobManager:
                     (f"{type(e).__name__}: {e}", dbm.now(), job_id))
                 conn.commit()
                 self._pub_job(conn, job_id, job["project_id"])
+                if job["kind"] == "build":
+                    # a crash mid-build must not strand the spec in 'building'
+                    # (which disables rebuilds); re-import restores the file's
+                    # status since the importer doesn't preserve 'building'
+                    try:
+                        importer.import_project(conn, job["project_id"])
+                        bus.publish(job["project_id"], {"type": "specs.updated"})
+                    except Exception:
+                        pass
         finally:
             self._procs.pop(job_id, None)
             self._prompts.pop(job_id, None)
