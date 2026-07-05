@@ -14,6 +14,15 @@ DEFAULTS: dict = {
     "claude_bin": "claude",
     "max_parallel": 3,
     "job_timeout_min": 30,
+    # Headless permission posture (SPEC D2): acceptEdits auto-approves file
+    # edits but Bash always needs an allow rule, so ship a default allowlist
+    # covering git/gh and common check runners. Editable in Config.
+    "allowed_tools": [
+        "Bash(git:*)", "Bash(gh:*)",
+        "Bash(npm:*)", "Bash(npx:*)", "Bash(yarn:*)", "Bash(pnpm:*)", "Bash(node:*)",
+        "Bash(python:*)", "Bash(pytest:*)", "Bash(pip:*)", "Bash(uv:*)",
+        "Bash(make:*)", "Bash(cargo:*)", "Bash(go:*)", "Bash(dotnet:*)",
+    ],
 }
 
 

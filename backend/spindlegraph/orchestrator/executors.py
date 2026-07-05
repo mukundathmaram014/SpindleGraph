@@ -42,6 +42,11 @@ def build_argv(executor: dict | None, prompt: str, cfg: dict,
         argv.append("--dangerously-skip-permissions")
     else:
         argv += ["--permission-mode", "acceptEdits"]
+        # acceptEdits only auto-approves file edits — Bash needs explicit
+        # allow rules or every git/npm/test command dies headless (D2)
+        rules = [r for r in (cfg.get("allowed_tools") or []) if r.strip()]
+        if rules:
+            argv += ["--allowedTools", ",".join(rules)]
     model = (executor or {}).get("model")
     if model:
         argv += ["--model", model]

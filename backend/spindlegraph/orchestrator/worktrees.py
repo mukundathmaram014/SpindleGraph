@@ -36,6 +36,14 @@ def create_worktree(repo: Path, project_slug: str, spec_key: str,
     branch = f"spec/{spec_key}"
     path = worktree_path(project_slug, spec_key)
     if path.exists():
+        # never destroy uncommitted agent work (e.g. a build that finished
+        # coding but couldn't commit) — surface it instead
+        code, out = run_git(["status", "--porcelain"], path)
+        if code == 0 and out.strip():
+            raise RuntimeError(
+                f"worktree {path} has uncommitted changes from a previous "
+                "build — commit or discard them there first (git status in "
+                "that directory), then rebuild")
         remove_worktree(repo, path)
     path.parent.mkdir(parents=True, exist_ok=True)
     code, out = run_git(["worktree", "add", "-b", branch, str(path), base_branch], repo)
@@ -54,9 +62,12 @@ def remove_worktree(repo: Path, path: Path) -> None:
     run_git(["worktree", "prune"], repo)
 
 
-def ensure_commands(target: Path) -> list[str]:
+def ensure_commands(target: Path, overwrite: bool = True) -> list[str]:
     """Copy bundled workflow commands into <target>/.claude/commands/.
-    Returns the names written (existing identical files are skipped)."""
+    Returns the names written (existing identical files are skipped).
+
+    Pass overwrite=False inside build worktrees: updating tracked files there
+    dirties the agent's diff with changes it didn't make."""
     dest = target / ".claude" / "commands"
     dest.mkdir(parents=True, exist_ok=True)
     written = []
@@ -65,7 +76,10 @@ def ensure_commands(target: Path) -> list[str]:
     for src in sorted(BUNDLED_COMMANDS.glob("*.md")):
         out = dest / src.name
         content = src.read_text(encoding="utf-8")
-        if not out.exists() or out.read_text(encoding="utf-8") != content:
+        if not out.exists():
+            out.write_text(content, encoding="utf-8")
+            written.append(src.name)
+        elif overwrite and out.read_text(encoding="utf-8") != content:
             out.write_text(content, encoding="utf-8")
             written.append(src.name)
     return written

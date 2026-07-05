@@ -406,7 +406,7 @@ class JobManager:
                 self._pub_job(conn, job["id"], proj["id"])
                 bus.publish(proj["id"], {"type": "specs.updated"})
                 return
-            wt.ensure_commands(path)
+            wt.ensure_commands(path, overwrite=False)
             conn.execute("UPDATE job SET worktree_path=?, branch=? WHERE id=?",
                          (str(path), branch, job["id"]))
             conn.commit()

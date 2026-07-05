@@ -184,3 +184,16 @@ def test_delete_project(client, git_repo):
     assert client.get(f"/api/projects/{proj['id']}").status_code == 404
     # target repo untouched
     assert (git_repo / "specs" / "0007-add-rate-limiting.md").exists()
+
+
+def test_allowed_tools_passed_to_cli(state_home):
+    from spindlegraph import config as cfgm
+    from spindlegraph.orchestrator import executors as exm
+    cfg = cfgm.load_config()
+    argv = exm.build_argv(None, "/build specs/x.md", cfg)
+    i = argv.index("--allowedTools")
+    rules = argv[i + 1]
+    assert "Bash(git:*)" in rules and "Bash(gh:*)" in rules and "Bash(npm:*)" in rules
+    # escalation drops the allowlist (bypass covers everything)
+    argv2 = exm.build_argv(None, "p", cfg, escalate=True)
+    assert "--allowedTools" not in argv2 and "--dangerously-skip-permissions" in argv2

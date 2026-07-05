@@ -48,6 +48,19 @@ export default function Config({ project, executors, refreshExecutors, refreshPr
             </button>
           </div>
         )}
+        {cfg && (
+          <label className="field" style={{ marginTop: 10 }}>
+            allowed Bash rules for headless agents (one per line — acceptEdits only
+            auto-approves file edits, so git/gh/test commands need these)
+            <textarea rows={4} className="mono" style={{ fontSize: 12 }}
+              value={(cfg.allowed_tools ?? []).join('\n')}
+              onChange={(e) => setCfg({
+                ...cfg,
+                allowed_tools: e.target.value.split('\n')
+                  .map((s) => s.trim()).filter(Boolean),
+              })} />
+          </label>
+        )}
       </section>
 
       <section className="panel pad">

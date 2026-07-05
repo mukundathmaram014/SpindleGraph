@@ -60,6 +60,7 @@ class ConfigPatch(BaseModel):
     claude_bin: str | None = None
     max_parallel: int | None = None
     job_timeout_min: int | None = None
+    allowed_tools: list[str] | None = None
 
 
 @router.patch("/config")
