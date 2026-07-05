@@ -234,6 +234,13 @@ def import_project(conn: sqlite3.Connection, project_id: int) -> dict:
             if rec:
                 rec["file_path"] = f"specs/{p.name}"
                 parsed[rec["number"]] = rec
+        # builds move finished specs here (location implies status)
+        for p in sorted((specs_dir / "implemented").glob("*.md")):
+            rec = parse_spec_file(p, repo_root)
+            if rec:
+                rec["file_path"] = f"specs/implemented/{p.name}"
+                rec["status"] = "built"
+                parsed[rec["number"]] = rec
 
     existing = {
         r["number"]: r

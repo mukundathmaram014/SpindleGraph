@@ -38,7 +38,8 @@ def capture_actual_files(repo: Path, default_branch: str, branch: str | None,
             continue
         change = parts[0].strip()[:1].upper()
         path = parts[-1].strip().replace("\\", "/")  # new path on renames
-        if not path or path == spec_file_path or path in seen:
+        # exclude spec files entirely — builds move them to specs/implemented/
+        if not path or path == spec_file_path or path.startswith("specs/")                 or path in seen:
             continue
         seen.add(path)
         files.append({"path": path, "change": change})

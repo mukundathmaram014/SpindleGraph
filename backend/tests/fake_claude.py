@@ -53,6 +53,10 @@ def main():
             tp.parent.mkdir(parents=True, exist_ok=True)
             with tp.open("a", encoding="utf-8") as fh:
                 fh.write("# touched by fake build\n")
+        if Path(spec_rel).exists() and not os.environ.get("FAKE_CLAUDE_NO_MOVE"):
+            dest = Path("specs/implemented") / Path(spec_rel).name
+            dest.parent.mkdir(parents=True, exist_ok=True)
+            Path(spec_rel).rename(dest)
         if not os.environ.get("FAKE_CLAUDE_NO_COMMIT"):
             subprocess.run(["git", "add", "-A"], check=True)
             subprocess.run(["git", "commit", "-q", "-m", f"{slug}: fake build"], check=True)

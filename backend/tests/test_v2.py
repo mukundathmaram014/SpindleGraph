@@ -224,3 +224,18 @@ def test_explicit_status_patch_overrides_built_preservation(client, git_repo):
     assert spec_by_number(client, proj["id"], 9)["status"] == "built"
     client.patch(f"/api/specs/{s9['id']}", json={"status": "decided"})
     assert spec_by_number(client, proj["id"], 9)["status"] == "decided"
+
+
+def test_implemented_folder_imports_as_built(conn, repo):
+    from conftest import make_project
+    from spindlegraph import importer as imp
+    imp_dir = repo / "specs" / "implemented"
+    imp_dir.mkdir(parents=True)
+    (imp_dir / "0030-shipped-thing.md").write_text(
+        "---\ntitle: Shipped thing\nstatus: draft\n---\n\n# Shipped thing\n\n"
+        "## Affected files\n- `src/config.py`\n", encoding="utf-8")
+    pid = make_project(conn, repo)
+    imp.import_project(conn, pid)
+    row = conn.execute("SELECT status, file_path FROM spec WHERE number=30").fetchone()
+    assert row["status"] == "built"          # location implies status
+    assert row["file_path"] == "specs/implemented/0030-shipped-thing.md"

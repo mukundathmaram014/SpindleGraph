@@ -10,7 +10,7 @@ You are writing a **spec**, not implementing anything. Follow this process:
    would plausibly touch. Defer to CLAUDE.md for stack conventions. If the
    idea references behavior, find where that behavior lives before writing.
 2. **Pick the filename.** Specs live in `specs/` as `NNNN-slug.md`. Use the
-   next free zero-padded number (check existing files) and a short kebab-case
+   next free zero-padded number (check existing files in BOTH specs/ and specs/implemented/) and a short kebab-case
    slug.
 3. **Write the spec** in exactly this shape:
 

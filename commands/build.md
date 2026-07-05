@@ -17,7 +17,8 @@ Implementation:
    allowed when reality demands it, but then **update the spec's Affected
    files section in this same branch** so it reflects what you actually
    touched.
-5. Update the spec's frontmatter to `status: built`.
+5. Update the spec's frontmatter to `status: built`, then move the spec file
+   into `specs/implemented/` (create the folder if needed) with `git mv`.
 6. Run the project's checks (tests, linter, build — whatever CLAUDE.md or the
    repo's config defines). Fix failures you introduced. If checks fail for
    pre-existing reasons, say so explicitly in the PR body.
