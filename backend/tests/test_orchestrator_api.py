@@ -102,6 +102,9 @@ def test_project_import_and_graph(client, git_repo):
     g = client.get(f"/api/projects/{proj['id']}/graph").json()
     assert {n["number"] for n in g["nodes"]} == {7, 9, 14}
     assert g["edges"] == []  # no overlap among these three
+    # recommended build order covers every non-built spec exactly once
+    flat = [i for w in g["suggested_waves"] for i in w]
+    assert sorted(flat) == sorted(n["id"] for n in g["nodes"])
     check = client.post(f"/api/projects/{proj['id']}/graph/check",
                         json={"spec_ids": [n["id"] for n in g["nodes"]]}).json()
     assert check["safe"] is True

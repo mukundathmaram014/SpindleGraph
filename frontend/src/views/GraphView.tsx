@@ -7,7 +7,7 @@ import {
 import FloatingEdge from './FloatingEdge'
 import DependencyEdge from './DependencyEdge'
 import RiskChip from './RiskChip'
-import { forceLayout } from './layout'
+import { LABEL_Y, waveLayout, type Lane } from './layout'
 
 const edgeTypes = { floating: FloatingEdge, dependency: DependencyEdge }
 
@@ -25,6 +25,7 @@ export default function GraphView({ project, executors, specs, graphTick, refres
   const [gnodes, setGnodes] = useState<GraphNode[]>([])
   const [gedges, setGedges] = useState<GraphEdge[]>([])
   const [gdeps, setGdeps] = useState<DepEdge[]>([])
+  const [gwaves, setGwaves] = useState<number[][]>([])
   const [selected, setSelected] = useState<number[]>([])
   const [check, setCheck] = useState<CheckResult | null>(null)
   const [error, setError] = useState('')
@@ -35,6 +36,7 @@ export default function GraphView({ project, executors, specs, graphTick, refres
       setGnodes(g.nodes)
       setGedges(g.edges)
       setGdeps(g.deps ?? [])
+      setGwaves(g.suggested_waves ?? [])
       setSelected((sel) => sel.filter((id) => g.nodes.some((n) => n.id === id)))
     }).catch((e) => setError(String(e)))
   }, [project.id, graphTick])
@@ -50,11 +52,11 @@ export default function GraphView({ project, executors, specs, graphTick, refres
     executors.find((e) => e.id === executorId)
     ?? executors.find((e) => e.enabled), [executors])
 
-  // force layout: conflicting specs cluster, independent specs drift apart
-  const positions = useMemo(() => forceLayout(
-    gnodes.map((n) => n.id),
-    gedges.map((e) => ({ a: e.spec_a, b: e.spec_b, weight: e.weight })),
-  ), [gnodes, gedges])
+  // wave-lane layout: the canvas is the recommended build order
+  const layout = useMemo(() => waveLayout(
+    gwaves,
+    gnodes.filter((n) => n.status === 'built').map((n) => n.id),
+  ), [gwaves, gnodes])
 
   const [nodes, setNodes, onNodesChange] = useNodesState([])
 
@@ -107,15 +109,23 @@ export default function GraphView({ project, executors, specs, graphTick, refres
   // rebuild node contents on data/selection changes, but keep dragged positions
   useEffect(() => {
     setNodes((prev) => {
-      const kept = new Map(prev.map((p) => [p.id, p.position]))
-      return gnodes.map((n) =>
-        buildNode(n, kept.get(String(n.id)) ?? positions.get(n.id) ?? { x: 0, y: 0 }))
+      const kept = new Map(prev.filter((p) => !p.id.startsWith('lane-'))
+        .map((p) => [p.id, p.position]))
+      return [
+        ...laneNodes(layout.lanes),
+        ...gnodes.map((n) => buildNode(
+          n, kept.get(String(n.id)) ?? layout.positions.get(n.id) ?? { x: 48, y: 92 })),
+      ]
     })
-  }, [gnodes, positions, buildNode, setNodes])
+  }, [gnodes, layout, buildNode, setNodes])
 
   const relayout = useCallback(() => {
-    setNodes(gnodes.map((n) => buildNode(n, positions.get(n.id) ?? { x: 0, y: 0 })))
-  }, [gnodes, positions, buildNode, setNodes])
+    setNodes([
+      ...laneNodes(layout.lanes),
+      ...gnodes.map((n) => buildNode(
+        n, layout.positions.get(n.id) ?? { x: 48, y: 92 })),
+    ])
+  }, [gnodes, layout, buildNode, setNodes])
 
   const edges: Edge[] = useMemo(() => {
     const conflict: Edge[] = gedges.map((e) => ({
@@ -203,9 +213,11 @@ export default function GraphView({ project, executors, specs, graphTick, refres
           <div style={{ position: 'relative', width: '100%', height: '100%' }}>
             <ReactFlow
               nodes={nodes} edges={edges} edgeTypes={edgeTypes} fitView
-              fitViewOptions={{ padding: 0.18 }}
+              fitViewOptions={{ padding: 0.15, maxZoom: 1 }}
               onNodesChange={onNodesChange}
-              onNodeClick={(_, node) => toggle(Number(node.id))}
+              onNodeClick={(_, node) => {
+                if (!node.id.startsWith('lane-')) toggle(Number(node.id))
+              }}
               nodesConnectable={false} proOptions={{ hideAttribution: true }}
             >
               <Background gap={24} />
@@ -216,8 +228,11 @@ export default function GraphView({ project, executors, specs, graphTick, refres
                 (thicker = more overlap; hover for the files)</span>
               <span><i className="key-dep" /> depends on — arrow points to the spec that
                 must build first</span>
-              <span><i className="key-sel" /> selected for the batch — click nodes to
-                toggle; distance ≈ independence</span>
+              <span>columns = <b>recommended build order</b> (✓ Built, then Wave 1,
+                2, … — riskiest first within a wave); a red edge reaching into a
+                later column is why that spec waits</span>
+              <span><i className="key-sel" /> selected for the batch — click nodes
+                to toggle</span>
               <span>
                 <i className="waveswatch" style={{ background: waveColor(0) }} />W1{' '}
                 <i className="waveswatch" style={{ background: waveColor(1) }} />W2 —
@@ -307,6 +322,29 @@ export default function GraphView({ project, executors, specs, graphTick, refres
       </div>
     </div>
   )
+}
+
+function laneNodes(lanes: Lane[]): Node[] {
+  return lanes.map((l) => ({
+    id: `lane-${l.kind}-${l.index}`,
+    position: { x: l.x, y: LABEL_Y },
+    data: {
+      label: (
+        <div className="lanelabel"
+          style={{ color: l.kind === 'wave' ? waveColor(l.index) : 'var(--good)' }}>
+          {l.kind === 'wave' && (
+            <span className="waveswatch" style={{ background: waveColor(l.index) }} />
+          )}
+          {l.label}
+        </div>
+      ),
+    },
+    draggable: false,
+    selectable: false,
+    connectable: false,
+    style: { background: 'transparent', border: 'none', padding: 0, width: 'auto',
+             pointerEvents: 'none' as const },
+  }))
 }
 
 function WaveRows({ wave, wi, byId, specById, executors, refreshSpecs, pOf }: {

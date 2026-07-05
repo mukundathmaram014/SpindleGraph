@@ -115,7 +115,7 @@ h2.section { font-size: 11.5px; letter-spacing: .1em; text-transform: uppercase;
 .riskchip.high { color: var(--bad); }
 .riskchip.medium { color: var(--warn); }
 .riskchip.low { color: var(--good); }
-.sgnode .t { font-weight: 700; }
+.sgnode .t { font-weight: 700; color: var(--ink); } /* react-flow default hardcodes #222 */
 .sgnode .sub { color: var(--muted); font-size: 10.5px; margin-top: 2px; }
 .sgnode.sel { border-color: var(--accent); box-shadow: 0 0 0 3px color-mix(in srgb, var(--accent) 25%, transparent); }
 .react-flow__handle { opacity: 0; pointer-events: none; }
@@ -125,7 +125,7 @@ h2.section { font-size: 11.5px; letter-spacing: .1em; text-transform: uppercase;
   padding: 0 7px; white-space: nowrap;
 }
 .graph-legend {
-  position: absolute; left: 10px; bottom: 10px; z-index: 5;
+  position: absolute; right: 10px; bottom: 10px; z-index: 5;
   display: grid; gap: 4px; font-size: 11.5px; color: var(--muted);
   background: color-mix(in srgb, var(--panel) 88%, transparent);
   border: 1px solid var(--line); border-radius: 8px; padding: 8px 11px;
@@ -192,3 +192,10 @@ table.executors input.wide { width: 160px; }
 }
 .depsrow { display: flex; gap: 8px; align-items: center; font-size: 13px; padding: 3px 0; }
 .depsrow input[type="checkbox"] { width: auto; padding: 0; accent-color: var(--accent); }
+
+/* wave-lane layout */
+.lanelabel {
+  font-size: 11.5px; font-weight: 800; letter-spacing: .12em;
+  text-transform: uppercase; white-space: nowrap;
+  display: inline-flex; align-items: center; gap: 6px;
+}

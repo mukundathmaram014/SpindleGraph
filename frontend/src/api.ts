@@ -85,7 +85,7 @@ export const api = {
   patchSpec: (id: number, body: Record<string, any>) =>
     req<Spec>('PATCH', `/api/specs/${id}`, body),
   graph: (pid: number) =>
-    req<{ nodes: GraphNode[]; edges: GraphEdge[]; deps: DepEdge[] }>('GET', `/api/projects/${pid}/graph`),
+    req<{ nodes: GraphNode[]; edges: GraphEdge[]; deps: DepEdge[]; suggested_waves: number[][] }>('GET', `/api/projects/${pid}/graph`),
   check: (pid: number, spec_ids: number[]) =>
     req<CheckResult>('POST', `/api/projects/${pid}/graph/check`, { spec_ids }),
   executors: () => req<Executor[]>('GET', '/api/executors'),

@@ -49,6 +49,23 @@ test('graph renders clusters and conflict edges', async ({ page }) => {
   await expect(page.locator('.sgnode')).toHaveCount(5)
   // two conflict edges, labeled with shared file counts
   await expect(page.locator('.edgelabel')).toHaveCount(2)
+  // wave-lane layout: recommended order rendered as labeled columns, and
+  // no two spec nodes may overlap
+  await expect(page.locator('.lanelabel')).toHaveCount(2)
+  await expect(page.locator('.lanelabel').first()).toHaveText(/Wave 1/)
+  const boxes = []
+  for (const n of await page.locator('.react-flow__node:not([data-id^="lane-"])').all()) {
+    const b = await n.boundingBox()
+    if (b) boxes.push(b)
+  }
+  for (let i = 0; i < boxes.length; i++) {
+    for (let j = i + 1; j < boxes.length; j++) {
+      const a = boxes[i], b = boxes[j]
+      const overlap = a.x < b.x + b.width && b.x < a.x + a.width
+        && a.y < b.y + b.height && b.y < a.y + a.height
+      expect(overlap, `nodes ${i} and ${j} overlap`).toBe(false)
+    }
+  }
   await page.screenshot({ path: shot('03-graph') })
 })
 

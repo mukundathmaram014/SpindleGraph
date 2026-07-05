@@ -296,7 +296,12 @@ def get_graph(project_id: int):
             for d in dict.fromkeys(s.get("depends_on") or [])
             if d in present and d != s["id"]
         ]
-        return {"nodes": nodes, "edges": edges, "deps": deps}
+        # recommended build order over everything not yet built — the canvas
+        # renders these as lanes (riskiest first within a wave, per §6)
+        buildable = [s["id"] for s in specs if s["status"] != "built"]
+        suggested = graph.suggest_waves(specs, edges, buildable) if buildable else []
+        return {"nodes": nodes, "edges": edges, "deps": deps,
+                "suggested_waves": suggested}
     finally:
         conn.close()
 
