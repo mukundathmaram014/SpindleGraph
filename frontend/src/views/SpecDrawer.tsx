@@ -14,7 +14,9 @@ export default function SpecDrawer({ spec, project, executors, specs, onClose, r
   const [editing, setEditing] = useState(false)
   const [error, setError] = useState('')
   const [busy, setBusy] = useState(false)
-  useEffect(() => { setBody(spec.body_md); setEditing(false) }, [spec.id, spec.body_md])
+  const [feedback, setFeedback] = useState('')
+  useEffect(() => { setBody(spec.body_md); setEditing(false); setFeedback('') },
+    [spec.id, spec.body_md])
   const otherSpecs = specs.filter((o) => o.id !== spec.id && o.status !== 'archived')
 
   const patch = async (payload: Record<string, unknown>) => {
@@ -49,6 +51,20 @@ export default function SpecDrawer({ spec, project, executors, specs, onClose, r
     setError('')
     try {
       await api.createJob({ project_id: project.id, kind: 'build', spec_ids: [spec.id] })
+      onClose()
+    } catch (e) {
+      setError(e instanceof Error ? e.message : String(e))
+    } finally {
+      setBusy(false)
+    }
+  }
+
+  const sendFeedback = async () => {
+    setBusy(true)
+    setError('')
+    try {
+      await api.createJob({ project_id: project.id, kind: 'feedback',
+                            spec_ids: [spec.id], idea: feedback.trim() })
       onClose()
     } catch (e) {
       setError(e instanceof Error ? e.message : String(e))
@@ -100,6 +116,25 @@ export default function SpecDrawer({ spec, project, executors, specs, onClose, r
             <a href={spec.provenance.pr_url} target="_blank" rel="noreferrer">Open PR ↗</a>
           )}
         </div>
+
+        {spec.status === 'built' && (
+          <section className="feedback-box">
+            <h2 className="section" style={{ margin: '0 0 6px' }}>Feedback / revise</h2>
+            <p style={{ margin: '0 0 6px', color: 'var(--muted)', fontSize: 12.5 }}>
+              Report a bug or gap in what was built. An agent revises it on the
+              existing branch <span className="mono">{spec.provenance?.branch}</span>,
+              so the fix rides the open PR.
+            </p>
+            <textarea rows={3} value={feedback} disabled={busy}
+              placeholder="e.g. the repeat-days selection isn't saved — reopening the edit dialog shows it reset"
+              onChange={(e) => setFeedback(e.target.value)} />
+            <div className="row" style={{ marginTop: 6 }}>
+              <div className="grow" />
+              <button className="primary" disabled={busy || !feedback.trim()}
+                onClick={sendFeedback}>Send feedback → revise</button>
+            </div>
+          </section>
+        )}
 
         {spec.decisions.length > 0 && (
           <section>

@@ -36,14 +36,16 @@ def create_worktree(repo: Path, project_slug: str, spec_key: str,
     branch = f"spec/{spec_key}"
     path = worktree_path(project_slug, spec_key)
     if path.exists():
-        # never destroy uncommitted agent work (e.g. a build that finished
-        # coding but couldn't commit) — surface it instead
+        # If a failed run left uncommitted edits behind, resume directly in the
+        # same worktree instead of forcing manual cleanup. This preserves agent
+        # progress across reruns (e.g. spend-limit interruptions).
         code, out = run_git(["status", "--porcelain"], path)
         if code == 0 and out.strip():
-            raise RuntimeError(
-                f"worktree {path} has uncommitted changes from a previous "
-                "build — commit or discard them there first (git status in "
-                "that directory), then rebuild")
+            code_b, out_b = run_git(["symbolic-ref", "--short", "HEAD"], path)
+            if code_b == 0 and out_b.strip() and out_b.strip() != branch:
+                # best effort: switch to the spec branch before resuming
+                run_git(["checkout", branch], path)
+            return path, branch
         remove_worktree(repo, path)
     path.parent.mkdir(parents=True, exist_ok=True)
     code, out = run_git(["worktree", "add", "-b", branch, str(path), base_branch], repo)
@@ -53,6 +55,30 @@ def create_worktree(repo: Path, project_slug: str, spec_key: str,
     if code != 0:
         raise RuntimeError(f"git worktree add failed: {out}")
     return path, branch
+
+
+def worktree_on_branch(repo: Path, project_slug: str, spec_key: str,
+                       branch: str) -> Path:
+    """Worktree checked out on an EXISTING branch (for feedback/revision of an
+    already-built spec — the revision must land on the same branch so it rides
+    the open PR)."""
+    path = worktree_path(project_slug, spec_key)
+    if path.exists():
+        code, out = run_git(["status", "--porcelain"], path)
+        if code == 0 and out.strip():
+            run_git(["checkout", branch], path)
+            return path
+        remove_worktree(repo, path)
+    path.parent.mkdir(parents=True, exist_ok=True)
+    code, out = run_git(["worktree", "add", str(path), branch], repo)
+    if code != 0:
+        raise RuntimeError(f"git worktree add on {branch} failed: {out}")
+    return path
+
+
+def branch_head(repo: Path, branch: str) -> str | None:
+    code, out = run_git(["rev-parse", branch], repo)
+    return out.strip() if code == 0 and out.strip() else None
 
 
 def remove_worktree(repo: Path, path: Path) -> None:

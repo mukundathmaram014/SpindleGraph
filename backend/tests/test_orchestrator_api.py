@@ -1,5 +1,6 @@
 """Integration tests: API + orchestrator against a real git fixture repo,
 with fake_claude.py standing in for the claude CLI."""
+import json
 import subprocess
 import sys
 import time
@@ -160,6 +161,45 @@ def test_build_failure_keeps_worktree(client, git_repo, monkeypatch):
     assert Path(job["worktree_path"]).exists()  # kept for inspection
     s9 = spec_by_number(client, proj["id"], 9)
     assert s9["status"] == "decided"  # rolled back
+
+
+def test_retry_auto_resumes_dirty_failed_worktree(client, git_repo, monkeypatch):
+    monkeypatch.setenv("FAKE_CLAUDE_FAIL", "1")
+    proj = add_project(client, git_repo)
+    s9 = spec_by_number(client, proj["id"], 9)
+    r1 = client.post("/api/jobs", json={"project_id": proj["id"], "kind": "build",
+                                        "spec_ids": [s9["id"]]})
+    first = wait_job(client, r1.json()["id"])
+    assert first["status"] == "failed"
+    wt = Path(first["worktree_path"])
+    assert wt.exists()
+
+    # simulate interrupted progress left by the previous attempt
+    (wt / "resume_note.txt").write_text("keep this work\n", encoding="utf-8")
+
+    monkeypatch.delenv("FAKE_CLAUDE_FAIL", raising=False)
+    r2 = client.post("/api/jobs", json={"project_id": proj["id"], "kind": "build",
+                                        "spec_ids": [s9["id"]]})
+    second = wait_job(client, r2.json()["id"])
+    assert second["status"] == "succeeded", second
+    # successful rerun cleans up the resumed worktree
+    assert not wt.exists()
+    s9 = spec_by_number(client, proj["id"], 9)
+    assert s9["status"] == "built"
+
+
+def test_lock_denied_build_auto_finalizes_on_host(client, git_repo, monkeypatch):
+    monkeypatch.setenv("FAKE_CLAUDE_LOCK_DENIED", "1")
+    proj = add_project(client, git_repo)
+    s9 = spec_by_number(client, proj["id"], 9)
+    r = client.post("/api/jobs", json={"project_id": proj["id"], "kind": "build",
+                                       "spec_ids": [s9["id"]]})
+    job = wait_job(client, r.json()["id"])
+    assert job["status"] == "succeeded", job
+    assert "host_finalize" in json.dumps(job["log_events"]).lower()
+    s9 = spec_by_number(client, proj["id"], 9)
+    assert s9["status"] == "built"
+    assert not Path(job["worktree_path"]).exists()
 
 
 def test_spec_job_creates_and_imports(client, git_repo):

@@ -542,9 +542,9 @@ def patch_executor(executor_id: int, body: ExecutorPatch):
 
 class JobCreate(BaseModel):
     project_id: int
-    kind: str  # triage | spec | build | build_batch | scaffold
+    kind: str  # triage | spec | build | build_batch | scaffold | feedback
     spec_ids: list[int] = []
-    idea: str | None = None            # kind=spec
+    idea: str | None = None            # kind=spec, or feedback text for kind=feedback
     executor_id: int | None = None
     waves: list[list[int]] | None = None  # kind=build_batch
 
@@ -586,6 +586,21 @@ async def create_job(body: JobCreate):
                 executor_id=body.executor_id or spec["executor_id"]
                 or manager.default_executor_id(conn, proj),
                 prompt=f"/build {spec['file_path']}")
+        elif kind == "feedback":
+            if len(body.spec_ids) != 1:
+                raise HTTPException(400, "kind=feedback requires exactly one spec id")
+            if not (body.idea and body.idea.strip()):
+                raise HTTPException(400, "kind=feedback requires feedback text in 'idea'")
+            spec = _get_spec(conn, body.spec_ids[0])
+            if spec["status"] != "built":
+                raise HTTPException(
+                    409, "feedback applies to a built spec (revises its branch)")
+            fb = body.idea.replace('"', "'")
+            job = manager.create_job(
+                conn, proj["id"], "feedback", [spec["id"]],
+                executor_id=body.executor_id or spec["executor_id"]
+                or manager.default_executor_id(conn, proj),
+                prompt=f'/feedback "{fb}"')
         elif kind == "build_batch":
             if not body.spec_ids:
                 raise HTTPException(400, "kind=build_batch requires spec_ids")

@@ -21,6 +21,10 @@ from . import executors as ex
 from . import worktrees as wt
 
 PR_RE = re.compile(r"https://github\.com/[^\s\"'<>)]+/pull/\d+")
+LOCK_DENIED_RE = re.compile(
+    r"unable to create '.*index\.lock'.*permission denied|index\.lock.*permission denied",
+    re.IGNORECASE,
+)
 TERMINAL = {"succeeded", "failed", "canceled", "skipped"}
 
 
@@ -145,6 +149,8 @@ class JobManager:
                     await self._run_batch(conn, dict(job), dict(proj))
                 elif job["kind"] == "reconcile":
                     await self._run_reconcile(conn, dict(job), dict(proj))
+                elif job["kind"] == "feedback":
+                    await self._run_feedback(conn, dict(job), dict(proj))
                 else:
                     await self._run_simple(conn, dict(job), dict(proj))
             except Exception as e:  # defensive: a job must always reach a terminal state
@@ -414,6 +420,31 @@ class JobManager:
             success = await self._exec(conn, job, path, executor)
 
         jrow = self.job_dict(conn, job["id"])
+        if not success and self._job_has_lock_permission_error(conn, job["id"]):
+            recovered, note = self._host_finalize_build(conn, dict(spec), jrow)
+            if recovered:
+                conn.execute(
+                    "UPDATE job SET status='succeeded', exit_code=0, error=NULL,"
+                    " pr_url=COALESCE(pr_url, ?), finished_at=? WHERE id=?",
+                    (note.get("pr_url"), dbm.now(), job["id"]))
+                conn.commit()
+                self._append_log_event(
+                    conn, job["id"], proj["id"],
+                    {
+                        "type": "system",
+                        "subtype": "host_finalize",
+                        "text": note["message"],
+                    },
+                )
+                success = True
+                jrow = self.job_dict(conn, job["id"])
+            else:
+                conn.execute(
+                    "UPDATE job SET error=COALESCE(error,'') || ? WHERE id=?",
+                    (f"\n[host-finalize] {note['message']}", job["id"]),
+                )
+                conn.commit()
+                jrow = self.job_dict(conn, job["id"])
         actual: list[dict] = []
         if success:
             # /build contract: at least one commit on the branch. An agent
@@ -456,6 +487,102 @@ class JobManager:
         bus.publish(proj["id"], {"type": "specs.updated"})
         self._pub_job(conn, job["id"], proj["id"])
 
+    def _job_has_lock_permission_error(self, conn: sqlite3.Connection,
+                                       job_id: int) -> bool:
+        row = conn.execute("SELECT error, log_path FROM job WHERE id=?",
+                           (job_id,)).fetchone()
+        error = str((row["error"] if row else "") or "")
+        if LOCK_DENIED_RE.search(error):
+            return True
+        low = error.lower()
+        if "index.lock" in low and "permission denied" in low:
+            return True
+        result = str(self._results.get(job_id) or "")
+        if LOCK_DENIED_RE.search(result):
+            return True
+        low_result = result.lower()
+        if "index.lock" in low_result and "permission denied" in low_result:
+            return True
+        log_path = row["log_path"] if row else None
+        if not log_path:
+            return False
+        try:
+            for line in Path(log_path).read_text(encoding="utf-8").splitlines()[-200:]:
+                low_line = line.lower()
+                if LOCK_DENIED_RE.search(line) or (
+                    "index.lock" in low_line and "permission denied" in low_line
+                ):
+                    return True
+        except OSError:
+            return False
+        return False
+
+    def _host_finalize_build(self, conn: sqlite3.Connection, spec: dict,
+                             job_row: dict) -> tuple[bool, dict]:
+        """If the agent produced edits but couldn't commit due a sandbox lock
+        write denial, stage non-generated files and commit from the host runner.
+        Returns (recovered, note)."""
+        wt_path = Path(str(job_row.get("worktree_path") or ""))
+        if not wt_path.exists():
+            return False, {"message": "host-finalize skipped: worktree missing", "pr_url": None}
+
+        code_s, out_s = wt.run_git(["status", "--porcelain"], wt_path)
+        if code_s != 0:
+            return False, {"message": f"host-finalize failed: {out_s}", "pr_url": None}
+        if not out_s.strip():
+            return False, {
+                "message": "host-finalize skipped: no changes in worktree",
+                "pr_url": None,
+            }
+
+        code_a, out_a = wt.run_git(["add", "-A"], wt_path)
+        if code_a != 0:
+            return False, {"message": f"host-finalize add failed: {out_a}", "pr_url": None}
+
+        code_d, out_d = wt.run_git(["diff", "--cached", "--name-only"], wt_path)
+        if code_d != 0:
+            return False, {"message": f"host-finalize staged-diff failed: {out_d}", "pr_url": None}
+        staged = [p.strip() for p in out_d.splitlines() if p.strip()]
+        keep = [p for p in staged if not _is_generated_artifact(p)]
+        drop = [p for p in staged if _is_generated_artifact(p)]
+        if drop:
+            wt.run_git(["reset", "HEAD", "--", *drop], wt_path)
+        if not keep:
+            return False, {
+                "message": "host-finalize skipped: only generated artifacts changed",
+                "pr_url": None,
+            }
+
+        title = (spec.get("title") or spec.get("slug") or "spec build").strip()
+        msg = f"spec-{int(spec['number']):04d}: {title}"
+        code_c, out_c = wt.run_git(["commit", "-m", msg], wt_path)
+        if code_c != 0:
+            return False, {"message": f"host-finalize commit failed: {out_c}", "pr_url": None}
+
+        branch = (job_row.get("branch") or "").strip()
+        pr_url = None
+        note = "Recovered from index.lock permission denial by host-finalizing commit"
+        code_r, remote = wt.run_git(["remote", "get-url", "origin"], wt_path)
+        if code_r == 0 and remote.strip() and branch:
+            code_p, out_p = wt.run_git(["push", "-u", "origin", branch], wt_path)
+            if code_p == 0:
+                pr_url = _github_pr_new_url(remote.strip(), branch)
+            else:
+                note += f"; push skipped: {out_p}"
+        return True, {"message": note, "pr_url": pr_url}
+
+    def _append_log_event(self, conn: sqlite3.Connection, job_id: int,
+                          project_id: int, evt: dict) -> None:
+        row = conn.execute("SELECT log_path FROM job WHERE id=?", (job_id,)).fetchone()
+        if row and row[0]:
+            try:
+                Path(row[0]).parent.mkdir(parents=True, exist_ok=True)
+                with Path(row[0]).open("a", encoding="utf-8") as f:
+                    f.write(json.dumps(evt) + "\n")
+            except OSError:
+                pass
+        bus.publish(project_id, {"type": "job.log", "job_id": job_id, "event": evt})
+
     async def _reconcile_after_build(self, conn: sqlite3.Connection, proj: dict,
                                      spec: dict, actual: list[dict],
                                      build_job_id: int) -> None:
@@ -478,6 +605,80 @@ class JobManager:
                 "prior_status": st["prior_status"]}
             self.launch(child["id"])
         bus.publish(proj["id"], {"type": "specs.updated"})
+
+    async def _run_feedback(self, conn: sqlite3.Connection, job: dict,
+                            proj: dict) -> None:
+        """Revise an already-built spec on its existing branch so the change
+        rides the open PR. Success = at least one NEW commit beyond the
+        branch's prior HEAD."""
+        spec_ids = json.loads(job["spec_ids_json"])
+        spec = conn.execute("SELECT * FROM spec WHERE id=?", (spec_ids[0],)).fetchone()
+        repo = Path(proj["repo_path"])
+        executor = self._executor_row(conn, job["executor_id"])
+        provenance = json.loads(spec["provenance_json"] or "{}")
+        branch = provenance.get("branch")
+        if not branch or not wt.branch_head(repo, branch):
+            conn.execute(
+                "UPDATE job SET status='failed', error=?, finished_at=? WHERE id=?",
+                (f"spec has no build branch to revise (provenance branch="
+                 f"{branch!r}); build it first", dbm.now(), job["id"]))
+            conn.commit()
+            self._pub_job(conn, job["id"], proj["id"])
+            return
+
+        async with self._semaphore():
+            spec_key = f"{spec['number']:04d}-{spec['slug']}"
+            head_before = wt.branch_head(repo, branch)
+            try:
+                path = wt.worktree_on_branch(repo, proj["slug"], spec_key, branch)
+            except RuntimeError as e:
+                conn.execute("UPDATE job SET status='failed', error=?, finished_at=?"
+                             " WHERE id=?", (str(e), dbm.now(), job["id"]))
+                conn.commit()
+                self._pub_job(conn, job["id"], proj["id"])
+                return
+            wt.ensure_commands(path, overwrite=False)
+            conn.execute("UPDATE job SET worktree_path=?, branch=? WHERE id=?",
+                         (str(path), branch, job["id"]))
+            conn.commit()
+            success = await self._exec(conn, job, path, executor)
+
+        jrow = self.job_dict(conn, job["id"])
+        head_after = wt.branch_head(Path(jrow["worktree_path"]), "HEAD")
+        made_commit = bool(head_after and head_after != head_before)
+        if success and not made_commit:
+            success = False
+            conn.execute(
+                "UPDATE job SET status='failed', outcome='failure', error=? WHERE id=?",
+                ("feedback produced no new commit — see the agent's final report;"
+                 f" worktree kept at {jrow['worktree_path']}", job["id"]))
+        if success:
+            actual = reconcile.capture_actual_files(
+                repo, proj["default_branch"], branch, spec["file_path"])
+            provenance["revised_at"] = dbm.now()
+            if jrow.get("pr_url"):
+                provenance["pr_url"] = jrow["pr_url"]
+            conn.execute(
+                "UPDATE spec SET files_actual_json=?, provenance_json=?, updated_at=?"
+                " WHERE id=?",
+                (json.dumps(actual), json.dumps(provenance), dbm.now(), spec["id"]))
+            conn.execute("UPDATE job SET outcome='success' WHERE id=?", (job["id"],))
+            wt.remove_worktree(repo, Path(jrow["worktree_path"]))
+        elif jrow.get("status") == "failed":
+            conn.execute("UPDATE job SET outcome='failure' WHERE id=?", (job["id"],))
+        conn.commit()
+        if executor and jrow.get("status") in ("succeeded", "failed"):
+            _record_outcome(conn, executor["id"], success, jrow.get("cost_usd"))
+        if success:
+            await self._reconcile_after_build(conn, proj, dict(spec),
+                                              json.loads(
+                                                  conn.execute(
+                                                      "SELECT files_actual_json FROM spec"
+                                                      " WHERE id=?", (spec["id"],))
+                                                  .fetchone()[0]),
+                                              job["id"])
+        bus.publish(proj["id"], {"type": "specs.updated"})
+        self._pub_job(conn, job["id"], proj["id"])
 
     async def _run_reconcile(self, conn: sqlite3.Connection, job: dict,
                              proj: dict) -> None:
@@ -623,6 +824,29 @@ def _kill_tree(proc: asyncio.subprocess.Process) -> None:
             proc.kill()
     except ProcessLookupError:
         pass
+
+
+def _is_generated_artifact(path: str) -> bool:
+    p = path.replace("\\", "/")
+    if p.endswith((".pyc", ".pyo")):
+        return True
+    needles = (
+        "/__pycache__/",
+        "/.pytest_cache/",
+        "/node_modules/",
+        "/frontend/build/",
+        "/frontend/dist/",
+    )
+    return any(n in f"/{p}" for n in needles)
+
+
+def _github_pr_new_url(remote_url: str, branch: str) -> str | None:
+    """Best-effort canonical PR creation URL from the origin remote."""
+    m = re.search(r"github\.com[:/]([^/]+)/([^/.]+)(?:\.git)?$", remote_url.strip())
+    if not m:
+        return None
+    owner, repo = m.group(1), m.group(2)
+    return f"https://github.com/{owner}/{repo}/pull/new/{branch}"
 
 
 manager = JobManager()

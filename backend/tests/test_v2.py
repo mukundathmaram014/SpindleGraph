@@ -1,6 +1,7 @@
 """v2: risk parsing + ordering, executor backends, project delete."""
 import json
 import sys
+import subprocess
 import types
 from pathlib import Path
 
@@ -239,3 +240,53 @@ def test_implemented_folder_imports_as_built(conn, repo):
     row = conn.execute("SELECT status, file_path FROM spec WHERE number=30").fetchone()
     assert row["status"] == "built"          # location implies status
     assert row["file_path"] == "specs/implemented/0030-shipped-thing.md"
+
+
+def test_feedback_revises_built_spec_on_its_branch(client, git_repo):
+    """After a build, feedback runs a follow-up on the SAME branch, adds a new
+    commit, and keeps the spec built."""
+    proj = add_project(client, git_repo)
+    s9 = spec_by_number(client, proj["id"], 9)
+    b = client.post("/api/jobs", json={"project_id": proj["id"], "kind": "build",
+                                       "spec_ids": [s9["id"]]})
+    wait_job(client, b.json()["id"])
+    assert spec_by_number(client, proj["id"], 9)["status"] == "built"
+
+    head_before = subprocess.run(
+        ["git", "rev-parse", "spec/0009-fix-login-redirect"], cwd=git_repo,
+        capture_output=True, text=True).stdout.strip()
+
+    fb = client.post("/api/jobs", json={
+        "project_id": proj["id"], "kind": "feedback", "spec_ids": [s9["id"]],
+        "idea": "the redirect still loops on mobile"})
+    assert fb.status_code == 200, fb.text
+    job = wait_job(client, fb.json()["id"])
+    assert job["status"] == "succeeded", job
+    assert job["branch"] == "spec/0009-fix-login-redirect"
+
+    head_after = subprocess.run(
+        ["git", "rev-parse", "spec/0009-fix-login-redirect"], cwd=git_repo,
+        capture_output=True, text=True).stdout.strip()
+    assert head_after != head_before        # new commit on the same branch
+    assert spec_by_number(client, proj["id"], 9)["status"] == "built"
+
+
+def test_feedback_requires_built_spec(client, git_repo):
+    proj = add_project(client, git_repo)
+    s14 = spec_by_number(client, proj["id"], 14)   # decided, never built
+    r = client.post("/api/jobs", json={"project_id": proj["id"], "kind": "feedback",
+                                       "spec_ids": [s14["id"]], "idea": "x"})
+    assert r.status_code == 409
+
+
+def test_feedback_no_commit_is_failure(client, git_repo, monkeypatch):
+    proj = add_project(client, git_repo)
+    s9 = spec_by_number(client, proj["id"], 9)
+    wait_job(client, client.post("/api/jobs", json={
+        "project_id": proj["id"], "kind": "build", "spec_ids": [s9["id"]]}).json()["id"])
+    monkeypatch.setenv("FAKE_CLAUDE_NO_COMMIT", "1")
+    fb = client.post("/api/jobs", json={"project_id": proj["id"], "kind": "feedback",
+                                        "spec_ids": [s9["id"]], "idea": "still broken"})
+    job = wait_job(client, fb.json()["id"])
+    assert job["status"] == "failed"
+    assert "no new commit" in job["error"]

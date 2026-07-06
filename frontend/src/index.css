@@ -199,3 +199,10 @@ table.executors input.wide { width: 160px; }
   text-transform: uppercase; white-space: nowrap;
   display: inline-flex; align-items: center; gap: 6px;
 }
+
+.feedback-box {
+  background: color-mix(in srgb, var(--accent) 7%, var(--panel));
+  border: 1px solid color-mix(in srgb, var(--accent) 30%, var(--line));
+  border-radius: 9px; padding: 11px;
+}
+.feedback-box textarea { width: 100%; font-size: 13px; }

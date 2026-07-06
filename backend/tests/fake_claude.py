@@ -57,6 +57,15 @@ def main():
             dest = Path("specs/implemented") / Path(spec_rel).name
             dest.parent.mkdir(parents=True, exist_ok=True)
             Path(spec_rel).rename(dest)
+        if os.environ.get("FAKE_CLAUDE_LOCK_DENIED"):
+            sys.stderr.write(
+                "fatal: Unable to create '/tmp/repo/.git/worktrees/spec/index.lock': "
+                "Permission denied\n"
+            )
+            emit({"type": "result", "subtype": "error", "is_error": True,
+                  "result": "commit blocked by index.lock permission denied",
+                  "usage": {"input_tokens": 500, "output_tokens": 120}})
+            sys.exit(1)
         if not os.environ.get("FAKE_CLAUDE_NO_COMMIT"):
             subprocess.run(["git", "add", "-A"], check=True)
             subprocess.run(["git", "commit", "-q", "-m", f"{slug}: fake build"], check=True)
@@ -69,6 +78,19 @@ def main():
                         "cache_read_input_tokens": 5000,
                         "cache_creation_input_tokens": 800},
               "total_cost_usd": 1.23})
+    elif prompt.startswith("/feedback"):
+        # revise on the current branch: a new commit addressing feedback
+        if not os.environ.get("FAKE_CLAUDE_NO_COMMIT"):
+            Path("feedback_fix.txt").write_text("addressed\n", encoding="utf-8")
+            subprocess.run(["git", "add", "-A"], check=True)
+            subprocess.run(["git", "commit", "-q", "-m",
+                            "spec-xxxx: address review feedback"], check=True)
+        emit({"type": "assistant", "message": {"content": [
+            {"type": "text", "text": "Fixed the reported issue and pushed."}]}})
+        emit({"type": "result", "subtype": "success", "is_error": False,
+              "result": "Done. PR: https://github.com/acme/demo/pull/321",
+              "usage": {"input_tokens": 800, "output_tokens": 150},
+              "total_cost_usd": 0.4})
     elif prompt.startswith("/spec"):
         specs = Path("specs")
         specs.mkdir(exist_ok=True)
