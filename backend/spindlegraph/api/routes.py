@@ -605,12 +605,19 @@ async def create_job(body: JobCreate):
         elif kind == "build":
             if len(body.spec_ids) != 1:
                 raise HTTPException(400, "kind=build requires exactly one spec id")
+            # re-sync from the spec file first: the file is canonical, and the
+            # /build agent reads it live off the branch. Without this, editing a
+            # spec outside SpindleGraph leaves the DB stale, so the decision
+            # gate here (DB) and the agent's precondition check (file) disagree.
+            importer.import_project(conn, proj["id"])
             spec = _get_spec(conn, body.spec_ids[0])
             unresolved = [d for d in json.loads(spec["decisions_json"])
                           if not d["resolved"]]
             if unresolved:
+                bus.publish(proj["id"], {"type": "specs.updated"})
                 raise HTTPException(
-                    409, f"spec has {len(unresolved)} unresolved decision(s)")
+                    409, f"spec has {len(unresolved)} unresolved decision(s) — "
+                    "resolve them in the spec file (or the drawer) and rebuild")
             job = manager.create_job(
                 conn, proj["id"], "build", [spec["id"]],
                 executor_id=body.executor_id or spec["executor_id"]

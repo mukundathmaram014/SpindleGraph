@@ -343,3 +343,21 @@ def test_open_pr_rejected_when_not_built(client, git_repo):
     proj = add_project(client, git_repo)
     s14 = spec_by_number(client, proj["id"], 14)  # decided, never built
     assert client.post(f"/api/specs/{s14['id']}/open-pr").status_code == 409
+
+
+def test_build_reimports_and_blocks_on_file_decisions(client, git_repo):
+    """Editing a spec file to ADD an unresolved decision (outside the drawer)
+    must block the build even if the DB was last imported without it."""
+    proj = add_project(client, git_repo)
+    s14 = spec_by_number(client, proj["id"], 14)  # decided, no decisions
+    # edit the file directly (as if via git/editor), then don't re-import
+    p = Path(git_repo) / s14["file_path"]
+    p.write_text(p.read_text(encoding="utf-8") +
+                 "\n## Decisions needed\n- [ ] which color scheme?\n", encoding="utf-8")
+    # DB still shows 0 decisions until the build re-syncs
+    assert spec_by_number(client, proj["id"], 14)["decisions"] == []
+    r = client.post("/api/jobs", json={"project_id": proj["id"], "kind": "build",
+                                       "spec_ids": [s14["id"]]})
+    assert r.status_code == 409
+    # and the re-sync updated the DB so the board now shows the decision
+    assert len(spec_by_number(client, proj["id"], 14)["decisions"]) == 1
