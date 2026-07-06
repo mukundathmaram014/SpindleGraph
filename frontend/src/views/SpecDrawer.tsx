@@ -115,6 +115,20 @@ export default function SpecDrawer({ spec, project, executors, specs, onClose, r
           {spec.provenance?.pr_url && (
             <a href={spec.provenance.pr_url} target="_blank" rel="noreferrer">Open PR ↗</a>
           )}
+          {spec.status === 'built' && !spec.provenance?.pr_url && spec.provenance?.branch && (
+            <button disabled={busy} onClick={async () => {
+              setBusy(true); setError('')
+              try {
+                const { pr_url } = await api.openPr(spec.id)
+                window.open(pr_url, '_blank')
+                await refresh()
+              } catch (e) {
+                setError(e instanceof Error ? e.message : String(e))
+              } finally { setBusy(false) }
+            }} title={`Push ${spec.provenance.branch} and open its PR`}>
+              ⇪ Open PR for branch
+            </button>
+          )}
         </div>
 
         {spec.status === 'built' && (

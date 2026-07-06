@@ -313,3 +313,33 @@ def test_feedback_lock_denied_host_finalizes(client, git_repo, monkeypatch):
         ["git", "rev-parse", "spec/0009-fix-login-redirect"], cwd=git_repo,
         capture_output=True, text=True).stdout.strip()
     assert head_after != head_before   # host committed the agent's fix
+
+
+def test_open_pr_for_built_spec_without_pr(client, git_repo, monkeypatch):
+    """A built spec whose branch has no PR gets one via the host on demand."""
+    from spindlegraph.orchestrator import worktrees as wtm
+    proj = add_project(client, git_repo)
+    s9 = spec_by_number(client, proj["id"], 9)
+    wait_job(client, client.post("/api/jobs", json={
+        "project_id": proj["id"], "kind": "build", "spec_ids": [s9["id"]]}).json()["id"])
+    # simulate a build that committed+pushed but never opened a PR
+    from spindlegraph import db as dbm
+    conn = dbm.connect()
+    conn.execute("UPDATE spec SET provenance_json=? WHERE id=?",
+                 (json.dumps({"branch": "spec/0009-fix-login-redirect", "pr_url": None,
+                              "job_id": 1}), s9["id"]))
+    conn.commit(); conn.close()
+
+    monkeypatch.setattr(wtm, "open_or_get_pr",
+                        lambda repo, branch, base: (
+                            "https://github.com/acme/demo/pull/909", "PR created"))
+    r = client.post(f"/api/specs/{s9['id']}/open-pr")
+    assert r.status_code == 200, r.text
+    assert r.json()["pr_url"].endswith("/pull/909")
+    assert spec_by_number(client, proj["id"], 9)["provenance"]["pr_url"].endswith("/pull/909")
+
+
+def test_open_pr_rejected_when_not_built(client, git_repo):
+    proj = add_project(client, git_repo)
+    s14 = spec_by_number(client, proj["id"], 14)  # decided, never built
+    assert client.post(f"/api/specs/{s14['id']}/open-pr").status_code == 409

@@ -4,6 +4,7 @@ Worktrees live under the app state dir (never inside the target repo).
 """
 from __future__ import annotations
 
+import re
 import shutil
 import subprocess
 from pathlib import Path
@@ -79,6 +80,42 @@ def worktree_on_branch(repo: Path, project_slug: str, spec_key: str,
 def branch_head(repo: Path, branch: str) -> str | None:
     code, out = run_git(["rev-parse", branch], repo)
     return out.strip() if code == 0 and out.strip() else None
+
+
+def run_gh(args: list[str], cwd: Path) -> tuple[int, str]:
+    try:
+        p = subprocess.run(["gh", *args], cwd=str(cwd), capture_output=True,
+                           text=True, encoding="utf-8", errors="replace", timeout=90)
+    except FileNotFoundError:
+        return 127, "gh CLI not found"
+    except subprocess.TimeoutExpired:
+        return 124, "gh timed out"
+    return p.returncode, (p.stdout + p.stderr).strip()
+
+
+def open_or_get_pr(repo: Path, branch: str, base: str) -> tuple[str | None, str]:
+    """Push the branch if needed, then return the existing PR URL or create
+    one via gh. Returns (pr_url, note). Runs on the (unsandboxed) host."""
+    code_r, remote = run_git(["remote", "get-url", "origin"], repo)
+    if code_r != 0 or not remote.strip():
+        return None, "no 'origin' remote — push the branch and open a PR manually"
+    # make sure the branch is on the remote
+    push_code, push_out = run_git(["push", "-u", "origin", branch], repo)
+    if push_code != 0 and "up-to-date" not in push_out.lower() \
+            and "up to date" not in push_out.lower():
+        return None, f"git push failed: {push_out[:200]}"
+    # existing PR?
+    code_v, out_v = run_gh(
+        ["pr", "view", branch, "--json", "url", "-q", ".url"], repo)
+    if code_v == 0 and out_v.strip().startswith("http"):
+        return out_v.strip(), "PR already existed"
+    # create one
+    code_c, out_c = run_gh(
+        ["pr", "create", "--head", branch, "--base", base, "--fill"], repo)
+    m = re.search(r"https://github\.com/\S+/pull/\d+", out_c)
+    if code_c == 0 and m:
+        return m.group(0), "PR created"
+    return None, f"gh pr create failed: {out_c[:200]}"
 
 
 def remove_worktree(repo: Path, path: Path) -> None:

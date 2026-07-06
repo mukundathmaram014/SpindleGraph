@@ -273,6 +273,36 @@ def patch_spec(spec_id: int, body: SpecPatch):
         conn.close()
 
 
+@router.post("/specs/{spec_id}/open-pr")
+def open_pr(spec_id: int):
+    """Open (or fetch) the PR for a built spec whose branch exists but never
+    got a PR — e.g. the build agent committed and pushed but stopped before
+    running gh. Runs gh on the host and records the URL on the spec + job."""
+    conn = _conn()
+    try:
+        spec = _get_spec(conn, spec_id)
+        proj = _get_project(conn, spec["project_id"])
+        provenance = json.loads(spec["provenance_json"] or "{}")
+        branch = provenance.get("branch")
+        if spec["status"] != "built" or not branch:
+            raise HTTPException(409, "spec has no built branch to open a PR for")
+        pr_url, note = wt.open_or_get_pr(
+            Path(proj["repo_path"]), branch, proj["default_branch"])
+        if not pr_url:
+            raise HTTPException(502, note)
+        provenance["pr_url"] = pr_url
+        conn.execute("UPDATE spec SET provenance_json=?, updated_at=? WHERE id=?",
+                     (json.dumps(provenance), dbm.now(), spec_id))
+        if provenance.get("job_id"):
+            conn.execute("UPDATE job SET pr_url=? WHERE id=?",
+                         (pr_url, provenance["job_id"]))
+        conn.commit()
+        bus.publish(spec["project_id"], {"type": "specs.updated"})
+        return {"pr_url": pr_url, "note": note}
+    finally:
+        conn.close()
+
+
 # ---------------- graph ----------------
 
 @router.get("/projects/{project_id}/graph")
