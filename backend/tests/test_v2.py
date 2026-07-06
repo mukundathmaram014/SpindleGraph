@@ -290,3 +290,26 @@ def test_feedback_no_commit_is_failure(client, git_repo, monkeypatch):
     job = wait_job(client, fb.json()["id"])
     assert job["status"] == "failed"
     assert "no new commit" in job["error"]
+
+
+def test_feedback_lock_denied_host_finalizes(client, git_repo, monkeypatch):
+    """Codex-style sandbox: agent makes the fix but can't write index.lock.
+    The host runner commits it on the branch so the revision isn't lost."""
+    proj = add_project(client, git_repo)
+    s9 = spec_by_number(client, proj["id"], 9)
+    wait_job(client, client.post("/api/jobs", json={
+        "project_id": proj["id"], "kind": "build", "spec_ids": [s9["id"]]}).json()["id"])
+    head_before = subprocess.run(
+        ["git", "rev-parse", "spec/0009-fix-login-redirect"], cwd=git_repo,
+        capture_output=True, text=True).stdout.strip()
+
+    monkeypatch.setenv("FAKE_CLAUDE_LOCK_DENIED", "1")
+    fb = client.post("/api/jobs", json={"project_id": proj["id"], "kind": "feedback",
+                                        "spec_ids": [s9["id"]], "idea": "still broken"})
+    job = wait_job(client, fb.json()["id"])
+    assert job["status"] == "succeeded", job
+    assert "host_finalize" in json.dumps(job["log_events"]).lower()
+    head_after = subprocess.run(
+        ["git", "rev-parse", "spec/0009-fix-login-redirect"], cwd=git_repo,
+        capture_output=True, text=True).stdout.strip()
+    assert head_after != head_before   # host committed the agent's fix

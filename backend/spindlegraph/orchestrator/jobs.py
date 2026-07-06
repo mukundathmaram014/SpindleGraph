@@ -646,6 +646,22 @@ class JobManager:
         jrow = self.job_dict(conn, job["id"])
         head_after = wt.branch_head(Path(jrow["worktree_path"]), "HEAD")
         made_commit = bool(head_after and head_after != head_before)
+        # sandboxed agents (e.g. Codex --full-auto) can't write the worktree's
+        # index.lock, which lives in the main repo's .git outside their sandbox
+        # — recover by committing + pushing from the (unsandboxed) host runner
+        if not made_commit and self._job_has_lock_permission_error(conn, job["id"]):
+            recovered, note = self._host_finalize_build(conn, dict(spec), jrow)
+            if recovered:
+                self._append_log_event(conn, job["id"], proj["id"],
+                    {"type": "system", "subtype": "host_finalize", "text": note["message"]})
+                if note.get("pr_url"):
+                    conn.execute("UPDATE job SET pr_url=COALESCE(pr_url, ?) WHERE id=?",
+                                 (note["pr_url"], job["id"]))
+                    conn.commit()
+                    jrow = self.job_dict(conn, job["id"])
+                success = True
+                head_after = wt.branch_head(Path(jrow["worktree_path"]), "HEAD")
+                made_commit = bool(head_after and head_after != head_before)
         if success and not made_commit:
             success = False
             conn.execute(

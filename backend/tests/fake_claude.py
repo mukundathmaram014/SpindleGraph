@@ -80,8 +80,18 @@ def main():
               "total_cost_usd": 1.23})
     elif prompt.startswith("/feedback"):
         # revise on the current branch: a new commit addressing feedback
+        Path("feedback_fix.txt").write_text("addressed\n", encoding="utf-8")
+        if os.environ.get("FAKE_CLAUDE_LOCK_DENIED"):
+            # sandboxed agent leaves edits but can't write index.lock
+            sys.stderr.write(
+                "fatal: Unable to create '/repo/.git/worktrees/x/index.lock': "
+                "Permission denied\n")
+            emit({"type": "result", "subtype": "success", "is_error": False,
+                  "result": "Made the fix but could not commit: index.lock permission "
+                  "denied", "usage": {"input_tokens": 800, "output_tokens": 150},
+                  "total_cost_usd": 0.4})
+            return
         if not os.environ.get("FAKE_CLAUDE_NO_COMMIT"):
-            Path("feedback_fix.txt").write_text("addressed\n", encoding="utf-8")
             subprocess.run(["git", "add", "-A"], check=True)
             subprocess.run(["git", "commit", "-q", "-m",
                             "spec-xxxx: address review feedback"], check=True)
