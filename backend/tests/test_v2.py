@@ -361,3 +361,24 @@ def test_build_reimports_and_blocks_on_file_decisions(client, git_repo):
     assert r.status_code == 409
     # and the re-sync updated the DB so the board now shows the decision
     assert len(spec_by_number(client, proj["id"], 14)["decisions"]) == 1
+
+
+def test_import_if_changed_gate(client, git_repo):
+    """?if_changed=true re-imports only when a spec file actually changed."""
+    proj = add_project(client, git_repo)
+    # first if_changed call: fingerprint unset -> imports (changed True)
+    r1 = client.post(f"/api/jobs" if False else
+                     f"/api/projects/{proj['id']}/import?if_changed=true")
+    assert r1.json()["changed"] is True
+    # nothing moved -> no-op
+    r2 = client.post(f"/api/projects/{proj['id']}/import?if_changed=true")
+    assert r2.json()["changed"] is False
+    # edit a spec file on disk -> detected
+    p = Path(git_repo) / "specs" / "0014-dark-mode.md"
+    p.write_text(p.read_text(encoding="utf-8") + "\n<!-- touched -->\n", encoding="utf-8")
+    r3 = client.post(f"/api/projects/{proj['id']}/import?if_changed=true")
+    assert r3.json()["changed"] is True
+    # a new spec file appearing is detected
+    (Path(git_repo) / "specs" / "0099-new.md").write_text(
+        "# New\n## Affected files\n- `x.py`\n", encoding="utf-8")
+    assert client.post(f"/api/projects/{proj['id']}/import?if_changed=true").json()["changed"] is True

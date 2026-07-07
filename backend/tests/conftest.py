@@ -14,6 +14,24 @@ def state_home(tmp_path, monkeypatch):
     return home
 
 
+@pytest.fixture(autouse=True)
+def reset_singletons():
+    """The JobManager is a module-global singleton; without this its in-memory
+    state (and especially an asyncio.Semaphore bound to a *prior* test's event
+    loop) leaks between tests and causes intermittent hangs/failures."""
+    from spindlegraph.orchestrator.jobs import manager
+    for attr in ("_tasks", "_procs", "_prompts", "_waves", "_results",
+                 "_reconcile_meta"):
+        getattr(manager, attr).clear()
+    manager._sem = None
+    try:
+        from spindlegraph.api import routes
+        routes._last_fingerprint.clear()
+    except Exception:
+        pass
+    yield
+
+
 @pytest.fixture
 def conn(state_home):
     from spindlegraph import db

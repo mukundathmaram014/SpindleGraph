@@ -219,6 +219,24 @@ def write_status_to_file(path: Path, status: str) -> None:
     path.write_text(text, encoding="utf-8")
 
 
+def specs_fingerprint(repo_root: Path) -> str:
+    """Cheap change-detector for the auto-refresh poll: a hash over every spec
+    file's (relpath, size, mtime). Changes iff a spec file is added, removed,
+    or edited — so a poll can skip re-importing when nothing moved."""
+    parts: list[str] = []
+    for sub in ("specs", "specs/implemented"):
+        d = repo_root / sub
+        if not d.is_dir():
+            continue
+        for p in sorted(d.glob("*.md")):
+            try:
+                st = p.stat()
+                parts.append(f"{sub}/{p.name}:{st.st_size}:{int(st.st_mtime_ns)}")
+            except OSError:
+                continue
+    return hashlib.sha256("\n".join(parts).encode("utf-8")).hexdigest()
+
+
 def import_project(conn: sqlite3.Connection, project_id: int) -> dict:
     """Scan the project's specs/ dir and sync Spec records. File wins for
     content; DB-only fields are preserved. Missing files -> archived."""

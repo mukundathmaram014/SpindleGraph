@@ -190,15 +190,27 @@ def delete_project(project_id: int):
         conn.close()
 
 
+# last specs fingerprint seen per project — lets the auto-refresh poll skip
+# the scan + event fan-out when no spec file changed
+_last_fingerprint: dict[int, str] = {}
+
+
 @router.post("/projects/{project_id}/import")
-def reimport(project_id: int):
+def reimport(project_id: int, if_changed: bool = False):
+    """Re-sync specs from the repo. With ?if_changed=true (the auto-refresh
+    poll), do nothing and publish nothing unless a spec file actually changed
+    since the last import — so polling on focus/interval is cheap and quiet."""
     conn = _conn()
     try:
-        _get_project(conn, project_id)
+        proj = _get_project(conn, project_id)
+        fp = importer.specs_fingerprint(Path(proj["repo_path"]))
+        if if_changed and _last_fingerprint.get(project_id) == fp:
+            return {"changed": False}
         res = importer.import_project(conn, project_id)
+        _last_fingerprint[project_id] = fp
         bus.publish(project_id, {"type": "specs.updated"})
         bus.publish(project_id, {"type": "graph.updated"})
-        return res
+        return {"changed": True, **res}
     finally:
         conn.close()
 

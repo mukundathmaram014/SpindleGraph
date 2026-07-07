@@ -61,6 +61,28 @@ export default function App() {
     if (projectId != null) localStorage.setItem('sg.project', String(projectId))
   }, [projectId])
 
+  // Auto-refresh: the DB is a projection of the repo's spec files, which change
+  // outside the app (merging PRs, pulling to main moves specs into
+  // implemented/). Re-import on tab focus and a light interval; the backend
+  // only re-scans + fires events when a spec file actually changed, so this is
+  // cheap and quiet when nothing moved.
+  useEffect(() => {
+    if (projectId == null) return
+    const sync = () => {
+      if (document.visibilityState === 'visible') void api.reimport(projectId, true)
+    }
+    sync()
+    const onVisible = () => { if (document.visibilityState === 'visible') sync() }
+    window.addEventListener('focus', sync)
+    document.addEventListener('visibilitychange', onVisible)
+    const timer = window.setInterval(sync, 20000)
+    return () => {
+      window.removeEventListener('focus', sync)
+      document.removeEventListener('visibilitychange', onVisible)
+      clearInterval(timer)
+    }
+  }, [projectId])
+
   useProjectEvents(projectId, (e) => {
     if (e.type === 'specs.updated') { void loadSpecs(); void loadProposals() }
     if (e.type === 'proposals.updated') void loadProposals()

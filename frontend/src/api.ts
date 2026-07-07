@@ -80,7 +80,8 @@ export const api = {
     req<Project>('POST', '/api/projects', body),
   patchProject: (id: number, body: Record<string, any>) =>
     req<Project>('PATCH', `/api/projects/${id}`, body),
-  reimport: (id: number) => req('POST', `/api/projects/${id}/import`),
+  reimport: (id: number, ifChanged = false) =>
+    req<{ changed: boolean }>('POST', `/api/projects/${id}/import${ifChanged ? '?if_changed=true' : ''}`),
   openPr: (specId: number) => req<{ pr_url: string; note: string }>('POST', `/api/specs/${specId}/open-pr`),
   specs: (pid: number) => req<Spec[]>('GET', `/api/projects/${pid}/specs`),
   patchSpec: (id: number, body: Record<string, any>) =>
