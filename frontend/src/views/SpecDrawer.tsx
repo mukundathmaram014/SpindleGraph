@@ -115,6 +115,16 @@ export default function SpecDrawer({ spec, project, executors, specs, onClose, r
           {spec.provenance?.pr_url && (
             <a href={spec.provenance.pr_url} target="_blank" rel="noreferrer">Open PR ↗</a>
           )}
+          {spec.status === 'stale' && (
+            <button disabled={busy}
+              title="This spec's reconcile pass failed or never ran. Clear the stale flag."
+              onClick={async () => {
+                setBusy(true); setError('')
+                try { await api.dismissStale(spec.id); await refresh() }
+                catch (e) { setError(e instanceof Error ? e.message : String(e)) }
+                finally { setBusy(false) }
+              }}>Dismiss stale</button>
+          )}
           {spec.status === 'built' && !spec.provenance?.pr_url && spec.provenance?.branch && (
             <button disabled={busy} onClick={async () => {
               setBusy(true); setError('')

@@ -794,10 +794,15 @@ class JobManager:
                 t = self._tasks.get(cid)
                 if t:
                     await t
-                crow = conn.execute("SELECT status FROM job WHERE id=?", (cid,)).fetchone()
+                crow = conn.execute("SELECT status, error FROM job WHERE id=?",
+                                    (cid,)).fetchone()
                 if crow and crow["status"] != "succeeded":
-                    failed.add(sid)
                     any_failure = True
+                    # A rate/spend-limit failure built nothing, so it does NOT
+                    # invalidate conflicting neighbors — don't cascade-skip them
+                    # (otherwise one spend-cap early in a wave poisons the rest).
+                    if not classify_limit(crow["error"] or ""):
+                        failed.add(sid)
 
         conn.execute(
             "UPDATE job SET status=?, error=?, finished_at=? WHERE id=?",

@@ -286,6 +286,58 @@ def patch_spec(spec_id: int, body: SpecPatch):
         conn.close()
 
 
+def _dismiss_one(conn, spec, repo_path: str) -> str:
+    """Clear a spec's stale flag, restoring the status its file implies."""
+    natural = "built" if "implemented/" in spec["file_path"] else "draft"
+    if natural != "built":
+        rec = importer.parse_spec_file(
+            Path(repo_path) / spec["file_path"], Path(repo_path))
+        if rec and rec["status"] not in ("stale", "building"):
+            natural = rec["status"]
+    conn.execute("UPDATE spec SET status=?, updated_at=? WHERE id=?",
+                 (natural, dbm.now(), spec["id"]))
+    return natural
+
+
+@router.post("/specs/{spec_id}/dismiss-stale")
+def dismiss_stale(spec_id: int):
+    """Clear the 'stale' flag on one spec — for when its reconcile pass failed
+    (e.g. spend limit) or never ran, leaving it stuck stale with no proposal."""
+    conn = _conn()
+    try:
+        spec = _get_spec(conn, spec_id)
+        if spec["status"] != "stale":
+            raise HTTPException(409, "spec is not stale")
+        proj = _get_project(conn, spec["project_id"])
+        _dismiss_one(conn, spec, proj["repo_path"])
+        conn.commit()
+        bus.publish(spec["project_id"], {"type": "specs.updated"})
+        bus.publish(spec["project_id"], {"type": "graph.updated"})
+        return _spec_dict(_get_spec(conn, spec_id))
+    finally:
+        conn.close()
+
+
+@router.post("/projects/{project_id}/dismiss-stale")
+def dismiss_all_stale(project_id: int):
+    """Clear every stuck 'stale' flag in a project at once."""
+    conn = _conn()
+    try:
+        proj = _get_project(conn, project_id)
+        rows = conn.execute(
+            "SELECT * FROM spec WHERE project_id=? AND status='stale'",
+            (project_id,)).fetchall()
+        for r in rows:
+            _dismiss_one(conn, r, proj["repo_path"])
+        conn.commit()
+        if rows:
+            bus.publish(project_id, {"type": "specs.updated"})
+            bus.publish(project_id, {"type": "graph.updated"})
+        return {"dismissed": len(rows)}
+    finally:
+        conn.close()
+
+
 @router.post("/specs/{spec_id}/open-pr")
 def open_pr(spec_id: int):
     """Open (or fetch) the PR for a built spec whose branch exists but never

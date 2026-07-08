@@ -23,6 +23,12 @@ export default function Board({ project, specs, executors, refresh }: {
           Spec board · {visible.length} specs
         </h2>
         <div className="grow" />
+        {stale.length > 0 && (
+          <button title="Clear stale flags left by reconcile passes that failed or never ran"
+            onClick={() => api.dismissAllStale(project.id).then(refresh)}>
+            Clear {stale.length} stale
+          </button>
+        )}
         <button onClick={() => api.reimport(project.id).then(refresh)}>↻ Refresh from repo</button>
       </div>
       <div className="board">

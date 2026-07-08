@@ -407,3 +407,50 @@ def test_spend_limit_job_surfaces_limit_hit(client, git_repo, monkeypatch):
     listed = next(j for j in client.get(f"/api/jobs?project_id={proj['id']}").json()
                   if j["id"] == job["id"])
     assert listed["limit_hit"] == "spend_capped"
+
+
+def test_batch_limit_failure_does_not_skip_neighbors(client, git_repo, monkeypatch):
+    """A spend/rate-limit failure builds nothing, so it must NOT cascade-skip
+    conflicting specs in later waves (they're fine — they just didn't run)."""
+    proj = add_project(client, git_repo)
+    # 7 and 9 conflict? use 7 (has decisions) — resolve first; make 7 & 9 share a file
+    # simpler: two specs where the batch would skip a neighbor on failure.
+    s7 = spec_by_number(client, proj["id"], 7)
+    body = s7["body_md"].replace("- [ ] Counter store: redis or in-memory?",
+                                 "- [x] Counter store → in-memory")
+    # make 7 conflict with 9 by sharing src/auth_views.py
+    body = body.replace("- `src/config.py` — settings",
+                        "- `src/config.py` — settings\n- `src/auth_views.py`")
+    client.patch(f"/api/specs/{s7['id']}", json={"body_md": body})
+    s9 = spec_by_number(client, proj["id"], 9)
+
+    monkeypatch.setenv("FAKE_CLAUDE_FAIL", "spend")
+    r = client.post("/api/jobs", json={"project_id": proj["id"], "kind": "build_batch",
+                                       "spec_ids": [s7["id"], s9["id"]],
+                                       "waves": [[s7["id"]], [s9["id"]]]})
+    batch = wait_job(client, r.json()["id"], timeout=60)
+    jobs = client.get(f"/api/jobs?project_id={proj['id']}").json()
+    children = [j for j in jobs if j.get("parent_job_id") == batch["id"]]
+    # the spend-capped build of 7 must NOT have skipped 9
+    skipped = [j for j in children if j["status"] == "skipped"]
+    assert not skipped, f"limit failure wrongly skipped neighbors: {skipped}"
+
+
+def test_dismiss_stale_clears_flag(client, git_repo, monkeypatch):
+    """A spec stuck 'stale' (reconcile failed/never ran) can be dismissed back
+    to its file's natural status."""
+    proj = add_project(client, git_repo)
+    s9 = spec_by_number(client, proj["id"], 9)  # decided
+    from spindlegraph import db as dbm
+    conn = dbm.connect()
+    conn.execute("UPDATE spec SET status='stale' WHERE id=?", (s9["id"],))
+    conn.commit(); conn.close()
+    assert spec_by_number(client, proj["id"], 9)["status"] == "stale"
+    r = client.post(f"/api/specs/{s9['id']}/dismiss-stale")
+    assert r.status_code == 200
+    assert spec_by_number(client, proj["id"], 9)["status"] == "decided"
+    # bulk endpoint
+    conn = dbm.connect(); conn.execute("UPDATE spec SET status='stale' WHERE id=?",
+                                       (s9["id"],)); conn.commit(); conn.close()
+    assert client.post(f"/api/projects/{proj['id']}/dismiss-stale").json()["dismissed"] == 1
+    assert spec_by_number(client, proj["id"], 9)["status"] == "decided"

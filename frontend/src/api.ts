@@ -84,6 +84,8 @@ export const api = {
   reimport: (id: number, ifChanged = false) =>
     req<{ changed: boolean }>('POST', `/api/projects/${id}/import${ifChanged ? '?if_changed=true' : ''}`),
   openPr: (specId: number) => req<{ pr_url: string; note: string }>('POST', `/api/specs/${specId}/open-pr`),
+  dismissStale: (specId: number) => req<Spec>('POST', `/api/specs/${specId}/dismiss-stale`),
+  dismissAllStale: (pid: number) => req<{ dismissed: number }>('POST', `/api/projects/${pid}/dismiss-stale`),
   specs: (pid: number) => req<Spec[]>('GET', `/api/projects/${pid}/specs`),
   patchSpec: (id: number, body: Record<string, any>) =>
     req<Spec>('PATCH', `/api/specs/${id}`, body),
