@@ -206,3 +206,7 @@ table.executors input.wide { width: 160px; }
   border-radius: 9px; padding: 11px;
 }
 .feedback-box textarea { width: 100%; font-size: 13px; }
+
+/* limit-hit job states (distinct from generic 'failed') */
+.pill.limit-spend_capped { color: var(--bad); background: color-mix(in srgb, var(--bad) 16%, var(--chip)); }
+.pill.limit-rate_limited { color: var(--warn); background: color-mix(in srgb, var(--warn) 16%, var(--chip)); }

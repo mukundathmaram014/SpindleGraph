@@ -789,3 +789,54 @@ Done when this demo path works end-to-end:
 - **D7 — Cost awareness. RESOLVED 2026-07-03:** yes — per-executor pricing +
   token capture from the stream, estimated cost and expected-cost-to-success
   shown beside probability in the composer. See §10 → Cost display.
+
+---
+
+## 18. Limit-hit handling & auto-restart (planned)
+
+Real builds hit two very different provider limits, and they need opposite
+handling. Conflating them is the trap.
+
+- **Spend cap** (Claude "monthly spend limit · raise it at claude.ai/settings/
+  usage"): a hard cap you set. Does **not** clear on its own — resets monthly
+  or when you raise it. Auto-retrying after N hours just fails again.
+- **Rolling rate limit** (Claude's ~5-hour session window; `429`/overloaded):
+  **does** clear on its own after the window.
+
+### Shipped (2026-07-08): distinct limit state
+`classify_limit(error)` tags a *failed* job as `spend_capped` | `rate_limited`
+| `null` (regex over the error text; spend checked first). Surfaced on the job
+as `limit_hit` and rendered as a distinct pill in the Runner (`$ spend cap` /
+`⏳ rate limit`) so these read at a glance instead of buried in the error text.
+Classification only — no retry yet.
+
+### Planned: auto-restart on rate limit
+- **State:** a rate-limited job moves to a `paused` state with a persisted
+  `retry_at` (durable on the job row — must survive a server restart, since a
+  wait can be hours; a startup sweep re-queues due jobs). A spend-capped job
+  does **not** auto-retry — it surfaces for user action.
+- **Probe, don't guess:** `retry_at` defaults to now + the executor's window
+  (Claude ≈ 5h, configurable per executor), but the sweeper doesn't fire the
+  expensive build blindly — it first sends a cheap `claude -p "ok"` ping and
+  only relaunches once the ping succeeds, re-probing on an interval otherwise.
+- **Resume, don't restart:** the failed build kept its worktree, so the retry
+  resumes partial work rather than paying twice.
+- **UI:** `⏸ paused — retrying ~HH:MM` with "retry now" / "cancel auto-retry".
+
+### Planned: executor failover (often better than waiting)
+Because executors are pluggable and calibrated independently, the higher-value
+response to a rate limit is frequently **failover to a non-Claude executor**
+(Codex, a local model) rather than waiting 5 hours — already observed working
+when Claude was capped. Per-project policy: on rate-limit → *wait-and-retry* or
+*failover to executor X* (or try failover first, fall back to waiting).
+
+### Open decisions
+- **D9 — retry vs failover default.** Which is the default on rate-limit:
+  wait-and-retry, executor-failover, or failover-then-wait? Likely per-project
+  config; default TBD from real use.
+- **D10 — worktree hold.** A paused build holds its worktree for the whole wait
+  (simple, resumes cleanly) vs. frees it and re-cuts later (tidier, loses
+  partial progress). Leaning hold.
+- **D11 — window source.** Is the retry window a hard per-executor default (5h
+  for Claude) or read from a `retry-after`/reset hint if the CLI ever exposes
+  one? Probe-gating makes the exact value non-critical.

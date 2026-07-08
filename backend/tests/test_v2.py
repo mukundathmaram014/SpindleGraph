@@ -382,3 +382,28 @@ def test_import_if_changed_gate(client, git_repo):
     (Path(git_repo) / "specs" / "0099-new.md").write_text(
         "# New\n## Affected files\n- `x.py`\n", encoding="utf-8")
     assert client.post(f"/api/projects/{proj['id']}/import?if_changed=true").json()["changed"] is True
+
+
+def test_limit_classification(client, git_repo):
+    from spindlegraph.orchestrator.jobs import classify_limit
+    assert classify_limit("You've hit your monthly spend limit · raise it at "
+                          "claude.ai/settings/usage") == "spend_capped"
+    assert classify_limit("Error 429: rate limit exceeded, retry later") == "rate_limited"
+    assert classify_limit("overloaded_error: the model is overloaded") == "rate_limited"
+    assert classify_limit("agent finished without committing") is None
+    assert classify_limit("") is None
+
+
+def test_spend_limit_job_surfaces_limit_hit(client, git_repo, monkeypatch):
+    monkeypatch.setenv("FAKE_CLAUDE_FAIL", "spend")  # see fake_claude
+    proj = add_project(client, git_repo)
+    s9 = spec_by_number(client, proj["id"], 9)
+    r = client.post("/api/jobs", json={"project_id": proj["id"], "kind": "build",
+                                       "spec_ids": [s9["id"]]})
+    job = wait_job(client, r.json()["id"])
+    assert job["status"] == "failed"
+    assert job["limit_hit"] == "spend_capped"
+    # and the list endpoint carries it too
+    listed = next(j for j in client.get(f"/api/jobs?project_id={proj['id']}").json()
+                  if j["id"] == job["id"])
+    assert listed["limit_hit"] == "spend_capped"

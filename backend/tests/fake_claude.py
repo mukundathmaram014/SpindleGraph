@@ -31,9 +31,12 @@ def main():
     emit({"type": "system", "subtype": "init", "cwd": os.getcwd(),
           "model": args.model or "fake"})
 
-    if os.environ.get("FAKE_CLAUDE_FAIL"):
+    fail = os.environ.get("FAKE_CLAUDE_FAIL")
+    if fail:
+        result = ("You've hit your monthly spend limit · raise it at "
+                  "claude.ai/settings/usage") if fail == "spend" else "fake failure"
         emit({"type": "result", "subtype": "error", "is_error": True,
-              "result": "fake failure", "usage": {"input_tokens": 10, "output_tokens": 2}})
+              "result": result, "usage": {"input_tokens": 10, "output_tokens": 2}})
         sys.exit(1)
 
     if prompt.startswith("/build"):

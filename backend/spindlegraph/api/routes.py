@@ -14,6 +14,7 @@ from .. import db as dbm
 from .. import graph, importer
 from ..events import bus
 from ..orchestrator import executors as ex
+from ..orchestrator import jobs as jobs_mod
 from ..orchestrator import worktrees as wt
 from ..orchestrator.jobs import manager
 
@@ -671,11 +672,18 @@ async def create_job(body: JobCreate):
         conn.close()
 
 
+def _job_dict(row) -> dict:
+    d = dbm.row_to_dict(row, dbm.JOB_JSON)
+    d["limit_hit"] = (jobs_mod.classify_limit(d.get("error") or "")
+                      if d.get("status") == "failed" else None)
+    return d
+
+
 @router.get("/jobs")
 def list_jobs(project_id: int):
     conn = _conn()
     try:
-        return [dbm.row_to_dict(r, dbm.JOB_JSON) for r in conn.execute(
+        return [_job_dict(r) for r in conn.execute(
             "SELECT * FROM job WHERE project_id=? ORDER BY id DESC LIMIT 200",
             (project_id,))]
     finally:
@@ -689,7 +697,7 @@ def get_job(job_id: int, tail: int = 500):
         row = conn.execute("SELECT * FROM job WHERE id=?", (job_id,)).fetchone()
         if row is None:
             raise HTTPException(404, "job not found")
-        d = dbm.row_to_dict(row, dbm.JOB_JSON)
+        d = _job_dict(row)
         log = Path(d["log_path"])
         events = []
         if log.exists():

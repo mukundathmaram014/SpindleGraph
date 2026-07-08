@@ -21,6 +21,26 @@ from . import executors as ex
 from . import worktrees as wt
 
 PR_RE = re.compile(r"https://github\.com/[^\s\"'<>)]+/pull/\d+")
+# A monthly SPEND cap won't clear on its own (needs raising / monthly reset);
+# a rolling RATE limit does. Classify so the UI (and a future auto-retry) can
+# treat them differently — see docs/SPEC.md §18.
+SPEND_RE = re.compile(
+    r"spend limit|claude\.ai/settings/usage|billing|insufficient\s+credit",
+    re.IGNORECASE)
+RATE_RE = re.compile(
+    r"rate[\s_-]?limit|usage limit|429|too many requests|overloaded",
+    re.IGNORECASE)
+
+
+def classify_limit(text: str) -> str | None:
+    """None | 'spend_capped' | 'rate_limited' from a failed job's error text."""
+    if not text:
+        return None
+    if SPEND_RE.search(text):
+        return "spend_capped"
+    if RATE_RE.search(text):
+        return "rate_limited"
+    return None
 LOCK_DENIED_RE = re.compile(
     r"unable to create '.*index\.lock'.*permission denied|index\.lock.*permission denied",
     re.IGNORECASE,
@@ -53,7 +73,12 @@ class JobManager:
     @staticmethod
     def job_dict(conn: sqlite3.Connection, job_id: int) -> dict:
         row = conn.execute("SELECT * FROM job WHERE id=?", (job_id,)).fetchone()
-        return dbm.row_to_dict(row, dbm.JOB_JSON) if row else {}
+        if not row:
+            return {}
+        d = dbm.row_to_dict(row, dbm.JOB_JSON)
+        d["limit_hit"] = (classify_limit(d.get("error") or "")
+                          if d.get("status") == "failed" else None)
+        return d
 
     def _pub_job(self, conn: sqlite3.Connection, job_id: int, project_id: int) -> None:
         bus.publish(project_id, {"type": "job.updated",

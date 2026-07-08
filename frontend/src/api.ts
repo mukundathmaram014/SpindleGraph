@@ -30,6 +30,7 @@ export interface Job {
   command: string; worktree_path: string | null; branch: string | null;
   pr_url: string | null; exit_code: number | null; error: string | null;
   created_at: string; started_at: string | null; finished_at: string | null;
+  limit_hit?: 'rate_limited' | 'spend_capped' | null;
   log_events?: LogEvent[];
 }
 export type LogEvent = Record<string, any>

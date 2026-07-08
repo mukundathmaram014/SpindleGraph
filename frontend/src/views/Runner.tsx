@@ -114,7 +114,16 @@ export default function Runner({ project, specs, executors }: {
               )}
               <span className="grow" />
               {j.cost_usd != null && <span className="mono">${j.cost_usd.toFixed(2)}</span>}
-              <span className={`pill ${j.status}`}>{j.status}</span>
+              {j.limit_hit ? (
+                <span className={`pill limit-${j.limit_hit}`}
+                  title={j.limit_hit === 'spend_capped'
+                    ? 'Hit the monthly spend cap — raise it at claude.ai/settings/usage, or switch executor'
+                    : 'Hit a rolling rate limit — retry after the window resets, or switch executor'}>
+                  {j.limit_hit === 'spend_capped' ? '$ spend cap' : '⏳ rate limit'}
+                </span>
+              ) : (
+                <span className={`pill ${j.status}`}>{j.status}</span>
+              )}
             </div>
           ))}
           {!jobs.length && <div className="empty">No jobs yet</div>}
@@ -127,6 +136,11 @@ export default function Runner({ project, specs, executors }: {
             <div className="pad row" style={{ borderBottom: '1px solid var(--line)' }}>
               <span className="mono">job #{open.id} · {open.kind}</span>
               <span className={`pill ${open.status}`}>{open.status}</span>
+              {open.limit_hit && (
+                <span className={`pill limit-${open.limit_hit}`}>
+                  {open.limit_hit === 'spend_capped' ? '$ spend cap' : '⏳ rate limit'}
+                </span>
+              )}
               {open.branch && <span className="mono" style={{ color: 'var(--muted)' }}>{open.branch}</span>}
               {open.pr_url && <a href={open.pr_url} target="_blank" rel="noreferrer">PR ↗</a>}
               <div className="grow" />
