@@ -507,6 +507,65 @@ def test_triage_candidates_only_on_triage_jobs(client, git_repo):
     assert resp.status_code == 400
 
 
+def _wait_chat(client, chat_id, timeout=60):
+    import time
+    deadline = time.time() + timeout
+    while time.time() < deadline:
+        c = client.get(f"/api/spec-chats/{chat_id}").json()
+        if not c["turn_running"]:
+            return c
+        time.sleep(0.15)
+    raise TimeoutError(f"chat {chat_id} turn stuck")
+
+
+def test_spec_chat_first_turn_asks_and_captures_session(client, git_repo):
+    proj = add_project(client, git_repo)
+    r = client.post("/api/spec-chats",
+                    json={"project_id": proj["id"], "topic": "Add offline sync"})
+    assert r.status_code == 200, r.text
+    chat = _wait_chat(client, r.json()["id"])
+    roles = [m["role"] for m in chat["messages"]]
+    assert roles == ["user", "agent"]  # our opener + the agent's question
+    assert "?" in chat["messages"][1]["text"]  # it asked something
+    assert chat["session_id"]                  # session captured for --resume
+    assert chat["spec_id"] is None             # nothing written yet
+    assert chat["status"] == "active"
+
+
+def test_spec_chat_reply_resumes_and_writes_spec(client, git_repo):
+    proj = add_project(client, git_repo)
+    chat = client.post("/api/spec-chats",
+                       json={"project_id": proj["id"], "topic": "Add offline sync"}).json()
+    chat = _wait_chat(client, chat["id"])
+    session = chat["session_id"]
+
+    r = client.post(f"/api/spec-chats/{chat['id']}/messages",
+                    json={"text": "last-write-wins, ship it"})
+    assert r.status_code == 200, r.text
+    chat = _wait_chat(client, chat["id"])
+
+    # the follow-up turn resumed the captured session
+    last_user = [m for m in chat["messages"] if m["role"] == "user"][-1]
+    turn_job = client.get(f"/api/jobs/{last_user['job_id']}").json()
+    assert f"--resume {session}" in turn_job["command"]
+
+    # and the agent wrote + linked a spec, now visible on the board
+    assert chat["spec_id"] is not None
+    linked = next(s for s in client.get(f"/api/projects/{proj['id']}/specs").json()
+                  if s["id"] == chat["spec_id"])
+    assert linked["status"] == "decided"
+
+
+def test_spec_chat_reply_requires_active_chat(client, git_repo):
+    proj = add_project(client, git_repo)
+    chat = client.post("/api/spec-chats",
+                       json={"project_id": proj["id"], "topic": "x"}).json()
+    _wait_chat(client, chat["id"])
+    client.post(f"/api/spec-chats/{chat['id']}/done")
+    r = client.post(f"/api/spec-chats/{chat['id']}/messages", json={"text": "more"})
+    assert r.status_code == 409
+
+
 def test_parse_triage_candidates_takes_last_valid_block():
     from spindlegraph.api.routes import parse_triage_candidates
     text = (

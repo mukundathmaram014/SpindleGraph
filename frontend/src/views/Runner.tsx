@@ -1,6 +1,7 @@
 import { useCallback, useEffect, useRef, useState } from 'react'
 import { api, type Executor, type Job, type LogEvent, type Project, type Spec, type TriageCandidate } from '../api'
 import { useProjectEvents } from '../ws'
+import SpecChat from './SpecChat'
 
 export default function Runner({ project, specs, executors }: {
   project: Project
@@ -16,6 +17,7 @@ export default function Runner({ project, specs, executors }: {
   const [candidates, setCandidates] = useState<TriageCandidate[]>([])
   const [picked, setPicked] = useState<Set<number>>(new Set())
   const [creating, setCreating] = useState(false)
+  const [chatId, setChatId] = useState<number | null>(null)
   const logRef = useRef<HTMLDivElement>(null)
 
   const loadJobs = useCallback(async () => {
@@ -58,6 +60,18 @@ export default function Runner({ project, specs, executors }: {
       setPicked(new Set(candidates.flatMap((c, i) => (c.flag ? [] : [i]))))
     }).catch(() => { setCandidates([]); setPicked(new Set()) })
   }, [openId, triageReady])
+
+  const discussCandidate = async (c: TriageCandidate) => {
+    setError('')
+    try {
+      const topic = c.grounding ? `${c.title} — ${c.grounding}` : c.title
+      const chat = await api.createSpecChat({ project_id: project.id, topic })
+      setChatId(chat.id)
+      await loadJobs()
+    } catch (e) {
+      setError(e instanceof Error ? e.message : String(e))
+    }
+  }
 
   const createPickedSpecs = async () => {
     setCreating(true); setError('')
@@ -219,6 +233,11 @@ export default function Runner({ project, specs, executors }: {
                       {c.flag === 'already_exists' && (
                         <span className="candflag muted" title="Looks already implemented">already exists?</span>
                       )}
+                      <button className="candchat" disabled={creating}
+                        title="Develop this into a spec conversationally, back and forth"
+                        onClick={(e) => { e.preventDefault(); void discussCandidate(c) }}>
+                        Discuss →
+                      </button>
                     </label>
                   ))}
                 </div>
@@ -233,6 +252,10 @@ export default function Runner({ project, specs, executors }: {
           <div className="empty" style={{ margin: 'auto' }}>Select a job to stream its log</div>
         )}
       </div>
+      {chatId != null && (
+        <SpecChat project={project} chatId={chatId}
+          onClose={() => setChatId(null)} refresh={loadJobs} />
+      )}
     </div>
   )
 }

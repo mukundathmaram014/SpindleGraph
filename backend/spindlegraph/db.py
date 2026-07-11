@@ -94,6 +94,26 @@ CREATE TABLE IF NOT EXISTS job (
   created_at    TEXT NOT NULL
 );
 
+CREATE TABLE IF NOT EXISTS spec_chat (
+  id            INTEGER PRIMARY KEY,
+  project_id    INTEGER NOT NULL REFERENCES project(id),
+  spec_id       INTEGER REFERENCES spec(id),   -- linked once the agent writes the file
+  session_id    TEXT,                          -- claude session for --resume continuity
+  topic         TEXT NOT NULL,                 -- the seed (triage candidate / spec title)
+  status        TEXT NOT NULL DEFAULT 'active',-- active | done
+  executor_id   INTEGER REFERENCES executor(id),
+  created_at    TEXT NOT NULL
+);
+
+CREATE TABLE IF NOT EXISTS spec_chat_message (
+  id            INTEGER PRIMARY KEY,
+  chat_id       INTEGER NOT NULL REFERENCES spec_chat(id),
+  role          TEXT NOT NULL,                 -- user | agent
+  text          TEXT NOT NULL,
+  job_id        INTEGER REFERENCES job(id),    -- the turn this message belongs to
+  created_at    TEXT NOT NULL
+);
+
 CREATE TABLE IF NOT EXISTS reconcile_proposal (
   id              INTEGER PRIMARY KEY,
   project_id      INTEGER NOT NULL REFERENCES project(id),

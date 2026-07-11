@@ -24,12 +24,14 @@ def main():
     p.add_argument("--permission-mode")
     p.add_argument("--model")
     p.add_argument("--allowedTools")
+    p.add_argument("--resume")
     p.add_argument("--dangerously-skip-permissions", action="store_true")
     args, _ = p.parse_known_args()
     prompt = args.prompt or ""
 
+    session_id = args.resume or f"sess-{os.getpid()}"
     emit({"type": "system", "subtype": "init", "cwd": os.getcwd(),
-          "model": args.model or "fake"})
+          "model": args.model or "fake", "session_id": session_id})
 
     fail = os.environ.get("FAKE_CLAUDE_FAIL")
     if fail:
@@ -131,6 +133,36 @@ def main():
                   "result": f"could not read notes: {e}",
                   "usage": {"input_tokens": 10, "output_tokens": 2}})
             sys.exit(1)
+    elif prompt.startswith("/spec-chat") or args.resume:
+        # A resumed turn carries only the user's raw reply (the real claude
+        # remembers /spec-chat via the session); the fake keys off --resume.
+        # first turn (no --resume): ask a clarifying question, write nothing.
+        # a resumed turn: settle it and write the spec + SPEC_FILE marker.
+        if not args.resume:
+            emit({"type": "result", "is_error": False,
+                  "result": "Grounded it in the code. One question: "
+                  "last-write-wins or manual merge on conflict?",
+                  "usage": {"input_tokens": 200, "output_tokens": 60},
+                  "session_id": session_id})
+        else:
+            specs = Path("specs")
+            specs.mkdir(exist_ok=True)
+            nums = [int(f.name.split("-")[0]) for f in specs.glob("*.md")
+                    if f.name.split("-")[0].isdigit()]
+            n = max(nums, default=0) + 1
+            rel = f"specs/{n:04d}-chatted-idea.md"
+            Path(rel).write_text(
+                "---\ntitle: Chatted idea\nstatus: decided\n---\n\n# Chatted idea\n\n"
+                "## Summary\nDeveloped via chat.\n\n"
+                "## Affected files\n- `src/config.py` — tweak\n\n"
+                "## Decisions needed\n\n"
+                "## Risk\n- **Involvement:** Minimal — one file\n"
+                "- **Review attention:** Low — no behavior change\n",
+                encoding="utf-8")
+            emit({"type": "result", "is_error": False,
+                  "result": f"Wrote the spec — take a look.\n\nSPEC_FILE: {rel}",
+                  "usage": {"input_tokens": 300, "output_tokens": 120},
+                  "session_id": session_id})
     elif prompt.startswith("/spec"):
         specs = Path("specs")
         specs.mkdir(exist_ok=True)

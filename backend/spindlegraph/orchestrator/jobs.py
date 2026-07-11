@@ -45,7 +45,18 @@ LOCK_DENIED_RE = re.compile(
     r"unable to create '.*index\.lock'.*permission denied|index\.lock.*permission denied",
     re.IGNORECASE,
 )
+# a spec-chat agent tags the file it wrote so we can link the chat to the spec
+SPEC_FILE_RE = re.compile(r"^\s*SPEC_FILE:\s*(\S+)\s*$", re.MULTILINE)
 TERMINAL = {"succeeded", "failed", "canceled", "skipped"}
+
+
+def _last_spec_file_marker(text: str) -> str | None:
+    """The repo-relative path from the last `SPEC_FILE: …` line an agent emitted,
+    normalized to forward slashes to match stored file_path values."""
+    matches = SPEC_FILE_RE.findall(text or "")
+    if not matches:
+        return None
+    return matches[-1].strip().strip("`").replace("\\", "/")
 
 
 def _quote(argv: list[str]) -> str:
@@ -58,6 +69,8 @@ class JobManager:
         self._procs: dict[int, asyncio.subprocess.Process] = {}
         self._prompts: dict[int, str] = {}
         self._extra_args: dict[int, list[str]] = {}
+        self._chat_of: dict[int, int] = {}        # job_id -> spec_chat.id
+        self._sessions: dict[int, str] = {}       # job_id -> claude session_id
         self._waves: dict[int, list[list[int]]] = {}
         self._results: dict[int, str] = {}
         self._reconcile_meta: dict[int, dict] = {}
@@ -136,6 +149,11 @@ class JobManager:
         self._pub_job(conn, job_id, project_id)
         return self.job_dict(conn, job_id)
 
+    def bind_chat(self, job_id: int, chat_id: int) -> None:
+        """Associate a spec_chat turn job with its conversation, so
+        _run_spec_chat can record the agent's reply against it."""
+        self._chat_of[job_id] = chat_id
+
     def launch(self, job_id: int) -> None:
         task = asyncio.get_running_loop().create_task(self._run(job_id))
         self._tasks[job_id] = task
@@ -180,6 +198,8 @@ class JobManager:
                     await self._run_reconcile(conn, dict(job), dict(proj))
                 elif job["kind"] == "feedback":
                     await self._run_feedback(conn, dict(job), dict(proj))
+                elif job["kind"] == "spec_chat":
+                    await self._run_spec_chat(conn, dict(job), dict(proj))
                 else:
                     await self._run_simple(conn, dict(job), dict(proj))
             except Exception as e:  # defensive: a job must always reach a terminal state
@@ -201,6 +221,8 @@ class JobManager:
             self._procs.pop(job_id, None)
             self._prompts.pop(job_id, None)
             self._extra_args.pop(job_id, None)
+            self._chat_of.pop(job_id, None)
+            self._sessions.pop(job_id, None)
             self._waves.pop(job_id, None)
             self._results.pop(job_id, None)
             self._reconcile_meta.pop(job_id, None)
@@ -244,11 +266,16 @@ class JobManager:
                        "text": line}
             with log_path.open("a", encoding="utf-8") as f:
                 f.write(json.dumps(evt) + "\n")
+            if evt.get("type") == "system" and evt.get("subtype") == "init":
+                if evt.get("session_id"):
+                    self._sessions[job_id] = str(evt["session_id"])
             if evt.get("type") == "result":
                 state["usage"] = evt.get("usage") or {}
                 state["is_error"] = bool(evt.get("is_error"))
                 state["result_text"] = str(evt.get("result") or "")
                 state["total_cost_usd"] = evt.get("total_cost_usd")
+                if evt.get("session_id"):
+                    self._sessions[job_id] = str(evt["session_id"])
             m = PR_RE.search(line)
             if m:
                 state["pr_url"] = m.group(0)
@@ -416,6 +443,47 @@ class JobManager:
             importer.import_project(conn, proj["id"])
             bus.publish(proj["id"], {"type": "graph.updated"})
             bus.publish(proj["id"], {"type": "specs.updated"})
+
+    async def _run_spec_chat(self, conn: sqlite3.Connection, job: dict, proj: dict) -> None:
+        """One turn of a spec-development conversation: run in the repo (the
+        agent reads code and may write the spec file), then record the agent's
+        message, capture the session for --resume, and link the spec if the
+        agent emitted a SPEC_FILE marker."""
+        chat_id = self._chat_of.get(job["id"])
+        repo = Path(proj["repo_path"])
+        wt.ensure_commands(repo)
+        executor = self._executor_row(conn, job["executor_id"])
+        success = await self._exec(conn, job, repo, executor)
+
+        session_id = self._sessions.get(job["id"])
+        reply = (self._results.get(job["id"]) or "").strip()
+        if chat_id is None:
+            return
+        if success and reply:
+            conn.execute(
+                "INSERT INTO spec_chat_message (chat_id, role, text, job_id, created_at)"
+                " VALUES (?,?,?,?,?)",
+                (chat_id, "agent", reply, job["id"], dbm.now()))
+        if session_id:
+            conn.execute("UPDATE spec_chat SET session_id=? WHERE id=?",
+                         (session_id, chat_id))
+        conn.commit()
+
+        if success:
+            importer.import_project(conn, proj["id"])
+            # link the chat to the spec the agent wrote, if it named one
+            spec_rel = _last_spec_file_marker(reply)
+            if spec_rel:
+                srow = conn.execute(
+                    "SELECT id FROM spec WHERE project_id=? AND file_path=?",
+                    (proj["id"], spec_rel)).fetchone()
+                if srow:
+                    conn.execute("UPDATE spec_chat SET spec_id=? WHERE id=?",
+                                 (srow["id"], chat_id))
+                    conn.commit()
+            bus.publish(proj["id"], {"type": "graph.updated"})
+            bus.publish(proj["id"], {"type": "specs.updated"})
+        bus.publish(proj["id"], {"type": "spec_chat.updated", "chat_id": chat_id})
 
     async def _run_build(self, conn: sqlite3.Connection, job: dict, proj: dict) -> None:
         spec_ids = json.loads(job["spec_ids_json"])

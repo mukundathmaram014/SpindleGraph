@@ -855,3 +855,133 @@ async def cancel_job(job_id: int):
     if not ok:
         raise HTTPException(409, "job is not running or queued")
     return {"canceled": True}
+
+
+# ---- spec chat: develop a spec back-and-forth before building it ----
+
+class SpecChatCreate(BaseModel):
+    project_id: int
+    topic: str
+    executor_id: int | None = None
+
+
+class SpecChatReply(BaseModel):
+    text: str
+
+
+def _chat_dict(conn, chat_row) -> dict:
+    d = dict(chat_row)
+    d["messages"] = [dict(m) for m in conn.execute(
+        "SELECT id, role, text, job_id, created_at FROM spec_chat_message"
+        " WHERE chat_id=? ORDER BY id", (d["id"],))]
+    # the turn is still running until its job reaches a terminal state
+    last = conn.execute(
+        "SELECT status FROM job WHERE id IN"
+        " (SELECT job_id FROM spec_chat_message WHERE chat_id=? AND job_id IS NOT NULL)"
+        " ORDER BY id DESC LIMIT 1", (d["id"],)).fetchone()
+    d["turn_running"] = bool(last and last["status"] in ("queued", "running"))
+    return d
+
+
+def _launch_chat_turn(conn, chat: dict, user_text: str, first: bool) -> None:
+    """Record the user's message and fire one agent turn. The first turn opens
+    a fresh session (loads /spec-chat); later turns --resume it for continuity."""
+    if first:
+        topic = user_text.replace('"', "'")
+        prompt = f'/spec-chat "{topic}"'
+        extra_args = None
+    else:
+        session = chat.get("session_id")
+        if not session:
+            raise HTTPException(409, "chat has no session yet — wait for the first "
+                                     "reply before continuing")
+        prompt = user_text
+        extra_args = ["--resume", session]
+    job = manager.create_job(conn, chat["project_id"], "spec_chat",
+                             executor_id=chat.get("executor_id"),
+                             prompt=prompt, extra_args=extra_args)
+    conn.execute(
+        "INSERT INTO spec_chat_message (chat_id, role, text, job_id, created_at)"
+        " VALUES (?,?,?,?,?)",
+        (chat["id"], "user", user_text, job["id"], dbm.now()))
+    conn.commit()
+    manager.bind_chat(job["id"], chat["id"])
+    manager.launch(job["id"])
+
+
+@router.post("/spec-chats")
+async def create_spec_chat(body: SpecChatCreate):
+    conn = _conn()
+    try:
+        proj = _get_project(conn, body.project_id)
+        topic = body.topic.strip()
+        if not topic:
+            raise HTTPException(400, "topic is required")
+        executor_id = body.executor_id or manager.default_executor_id(conn, proj)
+        cur = conn.execute(
+            "INSERT INTO spec_chat (project_id, topic, executor_id, created_at)"
+            " VALUES (?,?,?,?)", (proj["id"], topic, executor_id, dbm.now()))
+        chat_id = cur.lastrowid
+        conn.commit()
+        chat = dict(conn.execute("SELECT * FROM spec_chat WHERE id=?",
+                                 (chat_id,)).fetchone())
+        _launch_chat_turn(conn, chat, topic, first=True)
+        row = conn.execute("SELECT * FROM spec_chat WHERE id=?", (chat_id,)).fetchone()
+        return _chat_dict(conn, row)
+    finally:
+        conn.close()
+
+
+@router.get("/projects/{project_id}/spec-chats")
+def list_spec_chats(project_id: int):
+    conn = _conn()
+    try:
+        return [_chat_dict(conn, r) for r in conn.execute(
+            "SELECT * FROM spec_chat WHERE project_id=? ORDER BY id DESC",
+            (project_id,))]
+    finally:
+        conn.close()
+
+
+def _get_chat(conn, chat_id: int):
+    row = conn.execute("SELECT * FROM spec_chat WHERE id=?", (chat_id,)).fetchone()
+    if row is None:
+        raise HTTPException(404, "spec chat not found")
+    return row
+
+
+@router.get("/spec-chats/{chat_id}")
+def get_spec_chat(chat_id: int):
+    conn = _conn()
+    try:
+        return _chat_dict(conn, _get_chat(conn, chat_id))
+    finally:
+        conn.close()
+
+
+@router.post("/spec-chats/{chat_id}/messages")
+async def reply_spec_chat(chat_id: int, body: SpecChatReply):
+    conn = _conn()
+    try:
+        chat = dict(_get_chat(conn, chat_id))
+        text = body.text.strip()
+        if not text:
+            raise HTTPException(400, "message text is required")
+        if chat["status"] != "active":
+            raise HTTPException(409, "this chat is closed")
+        _launch_chat_turn(conn, chat, text, first=False)
+        return _chat_dict(conn, _get_chat(conn, chat_id))
+    finally:
+        conn.close()
+
+
+@router.post("/spec-chats/{chat_id}/done")
+def close_spec_chat(chat_id: int):
+    conn = _conn()
+    try:
+        _get_chat(conn, chat_id)
+        conn.execute("UPDATE spec_chat SET status='done' WHERE id=?", (chat_id,))
+        conn.commit()
+        return _chat_dict(conn, _get_chat(conn, chat_id))
+    finally:
+        conn.close()

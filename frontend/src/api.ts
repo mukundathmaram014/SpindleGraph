@@ -38,6 +38,14 @@ export interface TriageCandidate {
   title: string; size: 'S' | 'M' | 'L' | null; grounding: string;
   flag: 'needs_clarification' | 'already_exists' | null;
 }
+export interface SpecChatMessage {
+  id: number; role: 'user' | 'agent'; text: string; job_id: number | null; created_at: string;
+}
+export interface SpecChat {
+  id: number; project_id: number; spec_id: number | null; session_id: string | null;
+  topic: string; status: 'active' | 'done'; executor_id: number | null; created_at: string;
+  messages: SpecChatMessage[]; turn_running: boolean;
+}
 export interface GraphNode {
   id: number; number: number; slug: string; title: string; status: string;
   executor_id: number | null; file_count: number; unknown_footprint: boolean;
@@ -107,6 +115,13 @@ export const api = {
     req<{ candidates: TriageCandidate[] }>('GET', `/api/jobs/${jobId}/triage-candidates`),
   createJob: (body: Record<string, any>) => req<Job>('POST', '/api/jobs', body),
   cancelJob: (id: number) => req('POST', `/api/jobs/${id}/cancel`),
+  createSpecChat: (body: { project_id: number; topic: string; executor_id?: number }) =>
+    req<SpecChat>('POST', '/api/spec-chats', body),
+  specChat: (id: number) => req<SpecChat>('GET', `/api/spec-chats/${id}`),
+  specChats: (pid: number) => req<SpecChat[]>('GET', `/api/projects/${pid}/spec-chats`),
+  sendSpecChat: (id: number, text: string) =>
+    req<SpecChat>('POST', `/api/spec-chats/${id}/messages`, { text }),
+  closeSpecChat: (id: number) => req<SpecChat>('POST', `/api/spec-chats/${id}/done`),
   deleteProject: (id: number) => req('DELETE', `/api/projects/${id}`),
   proposals: (pid: number) =>
     req<Proposal[]>('GET', `/api/projects/${pid}/proposals`),

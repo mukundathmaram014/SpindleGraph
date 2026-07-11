@@ -1,6 +1,7 @@
 import { useEffect, useState } from 'react'
 import { api, type Executor, type Project, type Spec } from '../api'
 import RiskChip from './RiskChip'
+import SpecChat from './SpecChat'
 
 export default function SpecDrawer({ spec, project, executors, specs, onClose, refresh }: {
   spec: Spec
@@ -15,8 +16,24 @@ export default function SpecDrawer({ spec, project, executors, specs, onClose, r
   const [error, setError] = useState('')
   const [busy, setBusy] = useState(false)
   const [feedback, setFeedback] = useState('')
+  const [chatId, setChatId] = useState<number | null>(null)
   useEffect(() => { setBody(spec.body_md); setEditing(false); setFeedback('') },
     [spec.id, spec.body_md])
+
+  const refineWithAgent = async () => {
+    setBusy(true); setError('')
+    try {
+      const chat = await api.createSpecChat({
+        project_id: project.id,
+        topic: `Refine the existing spec at ${spec.file_path} ("${spec.title}")`,
+      })
+      setChatId(chat.id)
+    } catch (e) {
+      setError(e instanceof Error ? e.message : String(e))
+    } finally {
+      setBusy(false)
+    }
+  }
   const otherSpecs = specs.filter((o) => o.id !== spec.id && o.status !== 'archived')
 
   const patch = async (payload: Record<string, unknown>) => {
@@ -107,6 +124,12 @@ export default function SpecDrawer({ spec, project, executors, specs, onClose, r
             </select>
           </label>
           <div className="grow" />
+          {spec.status !== 'built' && spec.status !== 'building' && (
+            <button onClick={refineWithAgent} disabled={busy}
+              title="Develop this spec conversationally with an agent — it asks questions and revises the file">
+              💬 Refine with agent
+            </button>
+          )}
           <button className="primary" onClick={build}
             disabled={busy || unresolved.length > 0 || spec.status === 'building'}
             title={unresolved.length ? 'Resolve decisions first' : ''}>
@@ -248,6 +271,10 @@ export default function SpecDrawer({ spec, project, executors, specs, onClose, r
           )}
         </section>
       </aside>
+      {chatId != null && (
+        <SpecChat project={project} chatId={chatId}
+          onClose={() => setChatId(null)} refresh={refresh} />
+      )}
     </>
   )
 }

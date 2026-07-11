@@ -224,6 +224,41 @@ table.executors input.wide { width: 160px; }
 .candflag.warn { color: var(--warn); border-color: color-mix(in srgb, var(--warn) 45%, var(--line)); }
 .candflag.muted { color: var(--muted); }
 
+.candchat {
+  font-size: 11.5px; padding: 3px 8px; align-self: center; white-space: nowrap;
+  border-color: color-mix(in srgb, var(--accent) 40%, var(--line));
+  color: var(--accent);
+}
+.candchat:hover:not(:disabled) { background: color-mix(in srgb, var(--accent) 12%, var(--panel)); }
+
+/* spec chat drawer */
+.chat-drawer { display: flex; flex-direction: column; }
+.chatlog {
+  flex: 1; min-height: 0; overflow-y: auto; display: grid; gap: 12px;
+  padding: 12px 2px; align-content: start;
+}
+.chatmsg { display: grid; gap: 3px; max-width: 88%; }
+.chatmsg.user { justify-self: end; text-align: right; }
+.chatmsg.agent { justify-self: start; }
+.chatrole {
+  font-size: 10.5px; font-weight: 800; letter-spacing: .1em; text-transform: uppercase;
+  color: var(--muted);
+}
+.chatbubble {
+  white-space: pre-wrap; font-size: 13.5px; line-height: 1.5; padding: 9px 12px;
+  border-radius: 12px; border: 1px solid var(--line); background: var(--panel-2);
+}
+.chatmsg.user .chatbubble {
+  background: color-mix(in srgb, var(--accent) 20%, var(--panel));
+  border-color: color-mix(in srgb, var(--accent) 40%, var(--line));
+}
+.chatbubble.thinking { color: var(--muted); font-style: italic; }
+.chatinput {
+  display: flex; gap: 8px; align-items: flex-end; padding-top: 10px;
+  border-top: 1px solid var(--line);
+}
+.chatinput textarea { flex: 1; resize: vertical; min-height: 42px; }
+
 /* wave-lane layout */
 .lanelabel {
   font-size: 11.5px; font-weight: 800; letter-spacing: .12em;

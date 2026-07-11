@@ -492,14 +492,27 @@ stay live off a single connection; `job.log` events carry `job_id` for routing.
 
 ## 9. Bundled workflow commands (`commands/`)
 
-Four markdown command files, treated as templates: on onboarding (and before
+Markdown command files, treated as templates: on onboarding (and before
 any job) SpindleGraph copies them into the target repo's `.claude/commands/`
 (committing on onboarding, with user consent). They defer to the target repo's
 `CLAUDE.md` for stack conventions.
 
 - **`triage.md`** — read the notes doc, cluster into candidate work items,
-  emit a checklist of one-line candidates (does *not* write specs; the user
-  picks which to `/spec`).
+  emit a checklist of one-line candidates *and* a machine-readable
+  ```json {"candidates":[…]}``` block (does *not* write specs). The GUI parses
+  the block into a picker: the user checks candidates and fans out one `/spec`
+  job each, or opens a `/spec-chat` on a candidate to develop it conversationally.
+  (The notes doc often lives outside the repo, e.g. an Obsidian vault; the job
+  gets read access to its directory via `--add-dir` rather than embedding the
+  content, which would exceed the ~32K Windows command-line limit.)
+- **`spec-chat.md`** — develop one spec back-and-forth. A turn-based
+  conversation: each user reply resumes the same claude session server-side
+  (`--resume <session_id>`, captured from the stream-json `init` event), so
+  context carries without re-sending a growing transcript. The agent asks
+  clarifying questions, then writes/updates `specs/NNNN-slug.md` when the key
+  decisions settle, tagging the file with a `SPEC_FILE: <path>` marker so
+  SpindleGraph links the chat to the spec. Persisted in `spec_chat` /
+  `spec_chat_message`; each turn is a tracked job (kind `spec_chat`).
 - **`spec.md`** — take one idea/bug; ground it in the codebase (search, read);
   write `specs/NNNN-slug.md` in the canonical format (§4) — next free number,
   explicit **Affected files** with rationale, explicit **Decisions needed** for
