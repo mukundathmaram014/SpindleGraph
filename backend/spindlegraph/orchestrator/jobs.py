@@ -57,6 +57,7 @@ class JobManager:
         self._tasks: dict[int, asyncio.Task] = {}
         self._procs: dict[int, asyncio.subprocess.Process] = {}
         self._prompts: dict[int, str] = {}
+        self._extra_args: dict[int, list[str]] = {}
         self._waves: dict[int, list[list[int]]] = {}
         self._results: dict[int, str] = {}
         self._reconcile_meta: dict[int, dict] = {}
@@ -109,14 +110,15 @@ class JobManager:
     def create_job(self, conn: sqlite3.Connection, project_id: int, kind: str,
                    spec_ids: list[int] | None = None, executor_id: int | None = None,
                    prompt: str = "", parent_job_id: int | None = None,
-                   status: str = "queued", error: str | None = None) -> dict:
+                   status: str = "queued", error: str | None = None,
+                   extra_args: list[str] | None = None) -> dict:
         proj = conn.execute("SELECT * FROM project WHERE id=?", (project_id,)).fetchone()
         settings = json.loads(proj["settings_json"] or "{}")
         command = ""
         if kind != "build_batch" and status == "queued":
             command = ex.describe_command(
                 self._executor_row(conn, executor_id), prompt, config.load_config(),
-                bool(settings.get("permission_escalation")))
+                bool(settings.get("permission_escalation")), extra_args)
         cur = conn.execute(
             "INSERT INTO job (project_id, kind, spec_ids_json, parent_job_id, status,"
             " executor_id, command, error, log_path, created_at)"
@@ -129,6 +131,8 @@ class JobManager:
         conn.execute("UPDATE job SET log_path=? WHERE id=?", (str(log_path), job_id))
         conn.commit()
         self._prompts[job_id] = prompt
+        if extra_args:
+            self._extra_args[job_id] = list(extra_args)
         self._pub_job(conn, job_id, project_id)
         return self.job_dict(conn, job_id)
 
@@ -196,6 +200,7 @@ class JobManager:
         finally:
             self._procs.pop(job_id, None)
             self._prompts.pop(job_id, None)
+            self._extra_args.pop(job_id, None)
             self._waves.pop(job_id, None)
             self._results.pop(job_id, None)
             self._reconcile_meta.pop(job_id, None)
@@ -214,7 +219,8 @@ class JobManager:
                         .get("permission_escalation"))
         if (executor or {}).get("backend") == "claude_sdk":
             return await self._exec_sdk(conn, job, cwd, executor, escalate)
-        argv = ex.build_argv(executor, prompt, cfg, escalate)
+        argv = ex.build_argv(executor, prompt, cfg, escalate,
+                             self._extra_args.get(job_id))
         conn.execute("UPDATE job SET status='running', started_at=?, command=? WHERE id=?",
                      (dbm.now(), _quote(argv), job_id))
         conn.commit()

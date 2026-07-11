@@ -104,6 +104,20 @@ def main():
               "result": "Done. PR: https://github.com/acme/demo/pull/321",
               "usage": {"input_tokens": 800, "output_tokens": 150},
               "total_cost_usd": 0.4})
+    elif prompt.startswith("/triage"):
+        # the notes doc path is passed inline; SpindleGraph grants read access
+        # to its dir via --add-dir, so the agent reads it directly.
+        rel = prompt.split(None, 1)[1].strip() if " " in prompt else ""
+        try:
+            text = Path(rel).read_text(encoding="utf-8", errors="replace")
+            emit({"type": "result", "is_error": False,
+                  "result": f"triaged {len(text)} chars of notes",
+                  "usage": {"input_tokens": 300, "output_tokens": 90}})
+        except OSError as e:
+            emit({"type": "result", "subtype": "error", "is_error": True,
+                  "result": f"could not read notes: {e}",
+                  "usage": {"input_tokens": 10, "output_tokens": 2}})
+            sys.exit(1)
     elif prompt.startswith("/spec"):
         specs = Path("specs")
         specs.mkdir(exist_ok=True)

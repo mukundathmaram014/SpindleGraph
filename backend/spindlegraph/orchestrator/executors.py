@@ -16,7 +16,8 @@ BACKENDS = ("claude_code", "local_cli", "claude_sdk")
 
 
 def build_argv(executor: dict | None, prompt: str, cfg: dict,
-               escalate: bool = False) -> list[str]:
+               escalate: bool = False,
+               extra_args: list[str] | None = None) -> list[str]:
     backend = (executor or {}).get("backend", "claude_code")
     if backend == "local_cli":
         template = (executor or {}).get("command_template") or ""
@@ -50,16 +51,22 @@ def build_argv(executor: dict | None, prompt: str, cfg: dict,
     model = (executor or {}).get("model")
     if model:
         argv += ["--model", model]
+    # per-job flags, e.g. --add-dir to grant read access to a notes doc that
+    # lives outside the repo (triage)
+    if extra_args:
+        argv += list(extra_args)
     return argv
 
 
 def describe_command(executor: dict | None, prompt: str, cfg: dict,
-                     escalate: bool = False) -> str:
+                     escalate: bool = False,
+                     extra_args: list[str] | None = None) -> str:
     """Audit string for the job row (claude_sdk has no argv)."""
     import subprocess
     if (executor or {}).get("backend") == "claude_sdk":
         return f"[claude-agent-sdk] {prompt}"
-    return subprocess.list2cmdline(build_argv(executor, prompt, cfg, escalate))
+    return subprocess.list2cmdline(
+        build_argv(executor, prompt, cfg, escalate, extra_args))
 
 
 def estimated_success(executor: dict) -> float:

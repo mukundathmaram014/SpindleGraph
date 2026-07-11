@@ -2,10 +2,12 @@
 description: Mine a notes/ideas document into a list of candidate specs
 ---
 
-Triage the ideas document at: $ARGUMENTS
+Triage the following ideas/notes document: $ARGUMENTS
 
-Read the document, then read enough of this codebase (start with CLAUDE.md
-and the top-level layout) to judge each idea against reality.
+The document's content is provided inline above (SpindleGraph read it for you —
+it may live outside this repo, so do NOT try to open it as a file). Read enough
+of this codebase (start with CLAUDE.md and the top-level layout) to judge each
+idea against reality.
 
 Produce a **triage report** — do NOT write any spec files and do NOT modify
 any code. For each distinct work item you find in the notes:

@@ -661,9 +661,21 @@ async def create_job(body: JobCreate):
             notes = proj["notes_doc_path"]
             if not notes:
                 raise HTTPException(400, "project has no notes_doc_path configured")
-            job = manager.create_job(conn, proj["id"], "triage",
-                                     executor_id=body.executor_id,
-                                     prompt=f"/triage {notes}")
+            # The notes doc often lives OUTSIDE the repo (e.g. an Obsidian
+            # vault), where a headless agent scoped to the repo can't read it —
+            # the read prompt has no one to approve it. Grant read access to the
+            # doc's directory via --add-dir so the agent can open it. (Embedding
+            # the content in the prompt would blow the ~32K Windows command-line
+            # limit for large docs.)
+            notes_path = Path(notes).expanduser()
+            if not notes_path.is_absolute():
+                notes_path = Path(proj["repo_path"]) / notes_path
+            if not notes_path.is_file():
+                raise HTTPException(400, f"notes doc not found: {notes_path}")
+            job = manager.create_job(
+                conn, proj["id"], "triage", executor_id=body.executor_id,
+                prompt=f"/triage {notes_path}",
+                extra_args=["--add-dir", str(notes_path.parent)])
         elif kind == "scaffold":
             job = manager.create_job(conn, proj["id"], "scaffold",
                                      executor_id=body.executor_id, prompt="/init")

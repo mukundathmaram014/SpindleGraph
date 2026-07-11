@@ -454,3 +454,31 @@ def test_dismiss_stale_clears_flag(client, git_repo, monkeypatch):
                                        (s9["id"],)); conn.commit(); conn.close()
     assert client.post(f"/api/projects/{proj['id']}/dismiss-stale").json()["dismissed"] == 1
     assert spec_by_number(client, proj["id"], 9)["status"] == "decided"
+
+
+def test_triage_grants_read_access_to_external_notes_doc(client, git_repo, tmp_path):
+    """A notes doc OUTSIDE the repo (e.g. an Obsidian vault) can't be read by a
+    repo-scoped headless agent. SpindleGraph passes --add-dir for the doc's
+    directory so the agent can open it (embedding it would blow the ~32K
+    Windows command-line limit for large docs)."""
+    notes = tmp_path / "vault" / "ideas.md"
+    notes.parent.mkdir(parents=True)
+    notes.write_text("- add dark mode\n- faster export\n", encoding="utf-8")
+    proj = add_project(client, git_repo)
+    client.patch(f"/api/projects/{proj['id']}", json={"notes_doc_path": str(notes)})
+    r = client.post("/api/jobs", json={"project_id": proj["id"], "kind": "triage"})
+    assert r.status_code == 200, r.text
+    job = wait_job(client, r.json()["id"])
+    assert job["status"] == "succeeded", job
+    # the agent got read access to the doc's dir, not the embedded content
+    assert "--add-dir" in job["command"]
+    assert str(notes.parent) in job["command"]
+
+
+def test_triage_missing_notes_doc_errors_clearly(client, git_repo):
+    proj = add_project(client, git_repo)
+    client.patch(f"/api/projects/{proj['id']}",
+                 json={"notes_doc_path": "C:/nope/missing-notes.md"})
+    r = client.post("/api/jobs", json={"project_id": proj["id"], "kind": "triage"})
+    assert r.status_code == 400
+    assert "not found" in r.json()["detail"]
