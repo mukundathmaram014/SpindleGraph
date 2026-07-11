@@ -20,5 +20,26 @@ any code. For each distinct work item you find in the notes:
 - Flag items that appear already done in the code with `[already exists?]`.
 
 Order the list by your judgment of value-for-effort, best first. End with a
-short "Suggested next" line naming the 1–3 candidates you'd spec first. The
-user will pick candidates and run /spec on each.
+short "Suggested next" line naming the 1–3 candidates you'd spec first.
+
+Then, as the **very last thing in your final message**, emit the same
+candidates as a machine-readable block so SpindleGraph can offer them as a
+one-click "create specs" picker. Use exactly this fenced shape — a single
+JSON object with a `candidates` array, best-first (same order as the report):
+
+```json
+{"candidates": [
+  {"title": "<imperative candidate title>", "size": "S|M|L",
+   "grounding": "<one-sentence grounding>", "flag": null},
+  {"title": "...", "size": "L", "grounding": "...", "flag": "needs_clarification"},
+  {"title": "...", "size": "S", "grounding": "...", "flag": "already_exists"}
+]}
+```
+
+Rules for the block:
+- Include **every** candidate from your report, in the same order.
+- `flag` is `null` for clean, ready-to-spec candidates; `"needs_clarification"`
+  for vague ones; `"already_exists"` for ones that look already done. The UI
+  pre-selects only the `null`-flag candidates.
+- `title` is what gets handed to /spec, so make it a self-contained imperative.
+- Output nothing after this block.

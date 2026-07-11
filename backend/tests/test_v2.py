@@ -482,3 +482,40 @@ def test_triage_missing_notes_doc_errors_clearly(client, git_repo):
     r = client.post("/api/jobs", json={"project_id": proj["id"], "kind": "triage"})
     assert r.status_code == 400
     assert "not found" in r.json()["detail"]
+
+
+def test_triage_candidates_endpoint_parses_structured_block(client, git_repo, tmp_path):
+    """After triage, its candidates are exposed for the pick-and-fan-out UI."""
+    notes = tmp_path / "ideas.md"
+    notes.write_text("- dark mode\n- export\n- sync\n", encoding="utf-8")
+    proj = add_project(client, git_repo)
+    client.patch(f"/api/projects/{proj['id']}", json={"notes_doc_path": str(notes)})
+    r = client.post("/api/jobs", json={"project_id": proj["id"], "kind": "triage"})
+    job = wait_job(client, r.json()["id"])
+    assert job["status"] == "succeeded", job
+    cands = client.get(f"/api/jobs/{job['id']}/triage-candidates").json()["candidates"]
+    assert [c["title"] for c in cands] == ["Add dark mode", "Faster export", "Rewrite sync"]
+    assert cands[0]["flag"] is None and cands[0]["size"] == "M"
+    assert cands[2]["flag"] == "needs_clarification"
+
+
+def test_triage_candidates_only_on_triage_jobs(client, git_repo):
+    proj = add_project(client, git_repo)
+    r = client.post("/api/jobs", json={"project_id": proj["id"], "kind": "scaffold"})
+    job = wait_job(client, r.json()["id"])
+    resp = client.get(f"/api/jobs/{job['id']}/triage-candidates")
+    assert resp.status_code == 400
+
+
+def test_parse_triage_candidates_takes_last_valid_block():
+    from spindlegraph.api.routes import parse_triage_candidates
+    text = (
+        "here is a bad block:\n```json\n{not json}\n```\n"
+        "an unrelated block:\n```json\n{\"other\": 1}\n```\n"
+        "the real one:\n```json\n"
+        '{"candidates": [{"title": "Do X", "size": "s", "grounding": "g",'
+        ' "flag": "already_exists"}, {"title": "", "size": "M"}]}\n```\n')
+    out = parse_triage_candidates(text)
+    assert len(out) == 1  # the empty-title candidate is dropped
+    assert out[0] == {"title": "Do X", "size": "S", "grounding": "g",
+                      "flag": "already_exists"}

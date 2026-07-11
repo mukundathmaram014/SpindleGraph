@@ -1,5 +1,5 @@
 import { useCallback, useEffect, useRef, useState } from 'react'
-import { api, type Executor, type Job, type LogEvent, type Project, type Spec } from '../api'
+import { api, type Executor, type Job, type LogEvent, type Project, type Spec, type TriageCandidate } from '../api'
 import { useProjectEvents } from '../ws'
 
 export default function Runner({ project, specs, executors }: {
@@ -13,6 +13,9 @@ export default function Runner({ project, specs, executors }: {
   const [idea, setIdea] = useState('')
   const [buildSpec, setBuildSpec] = useState<number | ''>('')
   const [error, setError] = useState('')
+  const [candidates, setCandidates] = useState<TriageCandidate[]>([])
+  const [picked, setPicked] = useState<Set<number>>(new Set())
+  const [creating, setCreating] = useState(false)
   const logRef = useRef<HTMLDivElement>(null)
 
   const loadJobs = useCallback(async () => {
@@ -43,6 +46,35 @@ export default function Runner({ project, specs, executors }: {
     logRef.current?.scrollTo({ top: logRef.current.scrollHeight })
   }, [events])
 
+  // A finished triage job carries a structured candidate list — fetch it so we
+  // can offer a "create specs" picker instead of making the user re-run /spec.
+  const openJob = jobs.find((j) => j.id === openId)
+  const triageReady = openJob?.kind === 'triage' && openJob.status === 'succeeded'
+  useEffect(() => {
+    if (openId == null || !triageReady) { setCandidates([]); setPicked(new Set()); return }
+    api.triageCandidates(openId).then(({ candidates }) => {
+      setCandidates(candidates)
+      // pre-select the clean, ready-to-spec candidates only
+      setPicked(new Set(candidates.flatMap((c, i) => (c.flag ? [] : [i]))))
+    }).catch(() => { setCandidates([]); setPicked(new Set()) })
+  }, [openId, triageReady])
+
+  const createPickedSpecs = async () => {
+    setCreating(true); setError('')
+    try {
+      const chosen = candidates.filter((_, i) => picked.has(i))
+      for (const c of chosen) {
+        const ideaText = c.grounding ? `${c.title} — ${c.grounding}` : c.title
+        await api.createJob({ project_id: project.id, kind: 'spec', idea: ideaText })
+      }
+      await loadJobs()
+    } catch (e) {
+      setError(e instanceof Error ? e.message : String(e))
+    } finally {
+      setCreating(false)
+    }
+  }
+
   const run = async (body: Record<string, unknown>) => {
     setError('')
     try {
@@ -54,7 +86,7 @@ export default function Runner({ project, specs, executors }: {
     }
   }
 
-  const open = jobs.find((j) => j.id === openId)
+  const open = openJob
   const buildable = specs.filter((s) =>
     !['archived', 'building', 'built'].includes(s.status))
 
@@ -152,6 +184,46 @@ export default function Runner({ project, specs, executors }: {
               )}
             </div>
             {open.error && <div className="error-banner" style={{ margin: 10 }}>{open.error}</div>}
+            {triageReady && candidates.length > 0 && (
+              <div className="triage-picker">
+                <div className="row" style={{ marginBottom: 6 }}>
+                  <h3 className="section" style={{ margin: 0 }}>
+                    Candidates · {candidates.length}
+                  </h3>
+                  <span style={{ color: 'var(--muted)', fontSize: 12 }}>
+                    pick which to turn into specs
+                  </span>
+                  <div className="grow" />
+                  <button className="primary" disabled={creating || picked.size === 0}
+                    onClick={createPickedSpecs}>
+                    {creating ? 'Creating…' : `Create ${picked.size} spec${picked.size === 1 ? '' : 's'} →`}
+                  </button>
+                </div>
+                <div className="candlist">
+                  {candidates.map((c, i) => (
+                    <label key={i} className="candrow">
+                      <input type="checkbox" checked={picked.has(i)} disabled={creating}
+                        onChange={(e) => setPicked((p) => {
+                          const n = new Set(p)
+                          if (e.target.checked) n.add(i); else n.delete(i)
+                          return n
+                        })} />
+                      {c.size && <span className={`candsize s-${c.size}`}>{c.size}</span>}
+                      <span className="grow">
+                        <span className="candtitle">{c.title}</span>
+                        {c.grounding && <span className="candground"> — {c.grounding}</span>}
+                      </span>
+                      {c.flag === 'needs_clarification' && (
+                        <span className="candflag warn" title="Too vague to spec cleanly">needs clarification</span>
+                      )}
+                      {c.flag === 'already_exists' && (
+                        <span className="candflag muted" title="Looks already implemented">already exists?</span>
+                      )}
+                    </label>
+                  ))}
+                </div>
+              </div>
+            )}
             <div className="logpane grow" ref={logRef}>
               {events.map((e, i) => <EventLine key={i} e={e} />)}
               {!events.length && <div className="empty">Waiting for output…</div>}

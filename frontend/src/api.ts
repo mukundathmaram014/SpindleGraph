@@ -34,6 +34,10 @@ export interface Job {
   log_events?: LogEvent[];
 }
 export type LogEvent = Record<string, any>
+export interface TriageCandidate {
+  title: string; size: 'S' | 'M' | 'L' | null; grounding: string;
+  flag: 'needs_clarification' | 'already_exists' | null;
+}
 export interface GraphNode {
   id: number; number: number; slug: string; title: string; status: string;
   executor_id: number | null; file_count: number; unknown_footprint: boolean;
@@ -99,6 +103,8 @@ export const api = {
     req<Executor>('PATCH', `/api/executors/${id}`, body),
   jobs: (pid: number) => req<Job[]>('GET', `/api/jobs?project_id=${pid}`),
   job: (id: number) => req<Job>('GET', `/api/jobs/${id}`),
+  triageCandidates: (jobId: number) =>
+    req<{ candidates: TriageCandidate[] }>('GET', `/api/jobs/${jobId}/triage-candidates`),
   createJob: (body: Record<string, any>) => req<Job>('POST', '/api/jobs', body),
   cancelJob: (id: number) => req('POST', `/api/jobs/${id}/cancel`),
   deleteProject: (id: number) => req('DELETE', `/api/projects/${id}`),

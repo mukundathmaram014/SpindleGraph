@@ -110,8 +110,21 @@ def main():
         rel = prompt.split(None, 1)[1].strip() if " " in prompt else ""
         try:
             text = Path(rel).read_text(encoding="utf-8", errors="replace")
-            emit({"type": "result", "is_error": False,
-                  "result": f"triaged {len(text)} chars of notes",
+            report = (
+                f"Triaged {len(text)} chars of notes.\n\n"
+                "- [size: M] Add dark mode — touches theme layer\n"
+                "- [size: S] Faster export — csv path\n"
+                "- [size: L] Rewrite sync [needs clarification: scope]\n\n"
+                "Suggested next: Add dark mode.\n\n"
+                "```json\n" + json.dumps({"candidates": [
+                    {"title": "Add dark mode", "size": "M",
+                     "grounding": "touches theme layer", "flag": None},
+                    {"title": "Faster export", "size": "S",
+                     "grounding": "csv path", "flag": None},
+                    {"title": "Rewrite sync", "size": "L",
+                     "grounding": "new surface", "flag": "needs_clarification"},
+                ]}) + "\n```")
+            emit({"type": "result", "is_error": False, "result": report,
                   "usage": {"input_tokens": 300, "output_tokens": 90}})
         except OSError as e:
             emit({"type": "result", "subtype": "error", "is_error": True,

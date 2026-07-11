@@ -2,6 +2,7 @@
 from __future__ import annotations
 
 import json
+import re
 import shutil
 import subprocess
 from pathlib import Path
@@ -773,6 +774,77 @@ def get_job(job_id: int, tail: int = 500):
                     events.append({"type": "raw", "text": ln})
         d["log_events"] = events
         return d
+    finally:
+        conn.close()
+
+
+_JSON_BLOCK_RE = re.compile(r"```json\s*(.*?)```", re.DOTALL)
+
+
+def _job_output_text(log_path: str | None) -> str:
+    """All agent-authored text from a job's log: the final result plus every
+    assistant text message (the structured block may land in either)."""
+    if not log_path:
+        return ""
+    log = Path(log_path)
+    if not log.exists():
+        return ""
+    parts: list[str] = []
+    for ln in log.read_text(encoding="utf-8").splitlines():
+        try:
+            evt = json.loads(ln)
+        except json.JSONDecodeError:
+            continue
+        if evt.get("type") == "result":
+            parts.append(str(evt.get("result") or ""))
+        elif evt.get("type") == "assistant":
+            for c in (evt.get("message") or {}).get("content") or []:
+                if isinstance(c, dict) and c.get("type") == "text":
+                    parts.append(str(c.get("text") or ""))
+    return "\n".join(parts)
+
+
+def parse_triage_candidates(text: str) -> list[dict]:
+    """Pull the last valid ```json {"candidates": [...]} ``` block a triage
+    agent emitted and normalize it into pickable candidates."""
+    found: list = []
+    for m in _JSON_BLOCK_RE.finditer(text or ""):
+        try:
+            obj = json.loads(m.group(1).strip())
+        except json.JSONDecodeError:
+            continue
+        if isinstance(obj, dict) and isinstance(obj.get("candidates"), list):
+            found = obj["candidates"]  # last valid block wins
+    out: list[dict] = []
+    for c in found:
+        if not isinstance(c, dict):
+            continue
+        title = str(c.get("title") or "").strip()
+        if not title:
+            continue
+        size = str(c.get("size") or "").strip().upper()[:1]
+        flag = c.get("flag")
+        out.append({
+            "title": title,
+            "size": size if size in ("S", "M", "L") else None,
+            "grounding": str(c.get("grounding") or "").strip(),
+            "flag": flag if flag in ("needs_clarification", "already_exists") else None,
+        })
+    return out
+
+
+@router.get("/jobs/{job_id}/triage-candidates")
+def triage_candidates(job_id: int):
+    conn = _conn()
+    try:
+        row = conn.execute("SELECT * FROM job WHERE id=?", (job_id,)).fetchone()
+        if row is None:
+            raise HTTPException(404, "job not found")
+        d = _job_dict(row)
+        if d["kind"] != "triage":
+            raise HTTPException(400, "not a triage job")
+        text = _job_output_text(d.get("log_path"))
+        return {"candidates": parse_triage_candidates(text)}
     finally:
         conn.close()
 

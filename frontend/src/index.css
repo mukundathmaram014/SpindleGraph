@@ -193,6 +193,37 @@ table.executors input.wide { width: 160px; }
 .depsrow { display: flex; gap: 8px; align-items: center; font-size: 13px; padding: 3px 0; }
 .depsrow input[type="checkbox"] { width: auto; padding: 0; accent-color: var(--accent); }
 
+/* triage candidate picker */
+.triage-picker {
+  margin: 10px; padding: 10px 12px;
+  background: color-mix(in srgb, var(--accent) 6%, var(--panel));
+  border: 1px solid color-mix(in srgb, var(--accent) 35%, var(--line));
+  border-radius: 10px;
+}
+.candlist { display: grid; gap: 1px; max-height: 260px; overflow-y: auto; }
+.candrow {
+  display: flex; gap: 8px; align-items: baseline; font-size: 13px;
+  padding: 5px 4px; border-radius: 6px;
+}
+.candrow:hover { background: var(--panel-2); }
+.candrow input[type="checkbox"] {
+  width: auto; padding: 0; accent-color: var(--accent); align-self: center;
+}
+.candsize {
+  font: 700 10.5px/1 ui-monospace, monospace; padding: 3px 5px; border-radius: 4px;
+  background: var(--chip); color: var(--muted); align-self: center; min-width: 14px;
+  text-align: center;
+}
+.candsize.s-L { color: var(--warn); }
+.candtitle { font-weight: 600; color: var(--ink); }
+.candground { color: var(--muted); }
+.candflag {
+  font-size: 11px; font-weight: 700; white-space: nowrap; align-self: center;
+  padding: 2px 6px; border-radius: 999px; border: 1px solid var(--line);
+}
+.candflag.warn { color: var(--warn); border-color: color-mix(in srgb, var(--warn) 45%, var(--line)); }
+.candflag.muted { color: var(--muted); }
+
 /* wave-lane layout */
 .lanelabel {
   font-size: 11.5px; font-weight: 800; letter-spacing: .12em;
