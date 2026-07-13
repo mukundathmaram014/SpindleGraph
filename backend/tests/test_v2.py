@@ -566,6 +566,24 @@ def test_spec_chat_reply_requires_active_chat(client, git_repo):
     assert r.status_code == 409
 
 
+def test_parallel_spec_jobs_get_distinct_numbers(client, git_repo):
+    """Fanning out several /spec jobs must not let them all pick the same next
+    number and clobber each other on import."""
+    proj = add_project(client, git_repo)
+    before = {s["number"] for s in client.get(f"/api/projects/{proj['id']}/specs").json()}
+    jobs = [client.post("/api/jobs", json={"project_id": proj["id"], "kind": "spec",
+                                           "idea": f"idea {i}"}).json() for i in range(4)]
+    # each job's prompt should carry a distinct reserved number
+    reserved = [j["command"] for j in jobs]
+    import re
+    nums = [int(re.search(r"reserved spec number (\d+)", c).group(1)) for c in reserved]
+    assert len(set(nums)) == 4, nums  # all distinct
+    for j in jobs:
+        wait_job(client, j["id"])
+    after = {s["number"] for s in client.get(f"/api/projects/{proj['id']}/specs").json()}
+    assert len(after - before) == 4  # four new specs actually landed
+
+
 def test_parse_triage_candidates_takes_last_valid_block():
     from spindlegraph.api.routes import parse_triage_candidates
     text = (

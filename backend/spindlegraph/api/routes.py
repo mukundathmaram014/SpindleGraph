@@ -655,9 +655,15 @@ async def create_job(body: JobCreate):
             if not body.idea:
                 raise HTTPException(400, "kind=spec requires 'idea'")
             idea = body.idea.replace('"', "'")
+            # pin the spec number so parallel /spec jobs don't all pick the same
+            # one and clobber each other on import (number-keyed)
+            number = manager.reserve_spec_number(proj["repo_path"], proj["id"])
+            prompt = (f'/spec "{idea}"\n\n[SpindleGraph reserved spec number '
+                      f'{number:04d} — name the file specs/{number:04d}-<slug>.md '
+                      "using exactly this number, do not pick your own.]")
             job = manager.create_job(conn, proj["id"], "spec",
-                                     executor_id=body.executor_id,
-                                     prompt=f'/spec "{idea}"')
+                                     executor_id=body.executor_id, prompt=prompt)
+            manager.mark_reserved_number(job["id"], proj["id"], number)
         elif kind == "triage":
             notes = proj["notes_doc_path"]
             if not notes:

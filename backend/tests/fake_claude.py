@@ -7,6 +7,7 @@ FAKE_CLAUDE_FAIL=1.
 import argparse
 import json
 import os
+import re
 import subprocess
 import sys
 from pathlib import Path
@@ -166,9 +167,14 @@ def main():
     elif prompt.startswith("/spec"):
         specs = Path("specs")
         specs.mkdir(exist_ok=True)
-        nums = [int(f.name.split("-")[0]) for f in specs.glob("*.md")
-                if f.name.split("-")[0].isdigit()]
-        n = max(nums, default=0) + 1
+        # honor a SpindleGraph-reserved number if present, else pick next free
+        m = re.search(r"reserved spec number (\d+)", prompt)
+        if m:
+            n = int(m.group(1))
+        else:
+            nums = [int(f.name.split("-")[0]) for f in specs.glob("*.md")
+                    if f.name.split("-")[0].isdigit()]
+            n = max(nums, default=0) + 1
         f = specs / f"{n:04d}-generated-idea.md"
         f.write_text(
             "---\ntitle: Generated idea\nstatus: draft\n---\n\n# Generated idea\n\n"

@@ -9,9 +9,12 @@ You are writing a **spec**, not implementing anything. Follow this process:
 1. **Ground the idea in this codebase.** Search and read the files the change
    would plausibly touch. Defer to CLAUDE.md for stack conventions. If the
    idea references behavior, find where that behavior lives before writing.
-2. **Pick the filename.** Specs live in `specs/` as `NNNN-slug.md`. Use the
-   next free zero-padded number (check existing files in BOTH specs/ and specs/implemented/) and a short kebab-case
-   slug.
+2. **Pick the filename.** Specs live in `specs/` as `NNNN-slug.md`. If a
+   `[SpindleGraph reserved spec number NNNN …]` note appears above, you MUST use
+   exactly that number (it was reserved to avoid collisions with other spec
+   jobs running in parallel) — only choose your own slug. Otherwise use the next
+   free zero-padded number (check existing files in BOTH specs/ and
+   specs/implemented/). Always a short kebab-case slug.
 3. **Write the spec** in exactly this shape:
 
    ```markdown

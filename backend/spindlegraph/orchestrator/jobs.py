@@ -71,6 +71,8 @@ class JobManager:
         self._extra_args: dict[int, list[str]] = {}
         self._chat_of: dict[int, int] = {}        # job_id -> spec_chat.id
         self._sessions: dict[int, str] = {}       # job_id -> claude session_id
+        self._reserved_numbers: dict[int, set[int]] = {}  # project_id -> reserved
+        self._reserved_of: dict[int, tuple[int, int]] = {}  # job_id -> (pid, number)
         self._waves: dict[int, list[list[int]]] = {}
         self._results: dict[int, str] = {}
         self._reconcile_meta: dict[int, dict] = {}
@@ -154,6 +156,29 @@ class JobManager:
         _run_spec_chat can record the agent's reply against it."""
         self._chat_of[job_id] = chat_id
 
+    def reserve_spec_number(self, repo_path: str, project_id: int) -> int:
+        """Pin the next free spec number for a new /spec job. Parallel /spec
+        agents each compute 'next free number' independently and otherwise all
+        pick the same one, so their files collide (and the number-keyed import
+        drops all but one). Reserve here — spanning files on disk plus numbers
+        already handed to still-running jobs — so every job gets a distinct one."""
+        nums = {0}
+        for sub in ("specs", "specs/implemented"):
+            d = Path(repo_path) / sub
+            if d.is_dir():
+                for p in d.glob("*.md"):
+                    m = re.match(r"(\d{4})", p.name)
+                    if m:
+                        nums.add(int(m.group(1)))
+        reserved = self._reserved_numbers.setdefault(project_id, set())
+        nums |= reserved
+        n = max(nums) + 1
+        reserved.add(n)
+        return n
+
+    def mark_reserved_number(self, job_id: int, project_id: int, number: int) -> None:
+        self._reserved_of[job_id] = (project_id, number)
+
     def launch(self, job_id: int) -> None:
         task = asyncio.get_running_loop().create_task(self._run(job_id))
         self._tasks[job_id] = task
@@ -223,6 +248,11 @@ class JobManager:
             self._extra_args.pop(job_id, None)
             self._chat_of.pop(job_id, None)
             self._sessions.pop(job_id, None)
+            # release the reserved number: on success the spec is now imported
+            # (so its number is taken for real); on failure the number frees up
+            res = self._reserved_of.pop(job_id, None)
+            if res:
+                self._reserved_numbers.get(res[0], set()).discard(res[1])
             self._waves.pop(job_id, None)
             self._results.pop(job_id, None)
             self._reconcile_meta.pop(job_id, None)
