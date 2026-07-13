@@ -9,6 +9,7 @@ from pathlib import Path
 from fastapi import FastAPI, WebSocket, WebSocketDisconnect
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.staticfiles import StaticFiles
+from starlette.responses import Response
 
 from . import db as dbm
 from .api.routes import router
@@ -51,5 +52,18 @@ async def project_ws(ws: WebSocket, project_id: int):
         bus.unsubscribe(project_id, q)
 
 
+class SPAStaticFiles(StaticFiles):
+    """Serve the built SPA, but tell browsers never to cache the HTML entry
+    point. Vite's asset filenames are content-hashed (immutable), so only
+    index.html needs to revalidate — otherwise a cached index.html keeps
+    pointing at a stale JS bundle and new features silently don't appear."""
+
+    async def get_response(self, path: str, scope) -> Response:
+        resp = await super().get_response(path, scope)
+        if "text/html" in resp.headers.get("content-type", ""):
+            resp.headers["Cache-Control"] = "no-cache, must-revalidate"
+        return resp
+
+
 if FRONTEND_DIST is not None:
-    app.mount("/", StaticFiles(directory=str(FRONTEND_DIST), html=True), name="ui")
+    app.mount("/", SPAStaticFiles(directory=str(FRONTEND_DIST), html=True), name="ui")
