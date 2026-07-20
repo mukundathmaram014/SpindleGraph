@@ -124,8 +124,12 @@ def parse_spec_file(path: Path, repo_root: Path) -> dict | None:
                 section = None
             continue
         # a non-blank paragraph line ends a list section (tolerant parsing:
-        # sections are "the list under the heading")
-        if section and line.strip() and not LIST_ITEM_RE.match(line):
+        # sections are "the list under the heading") — but an INDENTED line is a
+        # wrapped continuation of the current bullet, not a new paragraph, so it
+        # must not close the section. Without this, a bullet whose text wraps to
+        # a second (indented) line drops every later item in the section.
+        if (section and line.strip() and not LIST_ITEM_RE.match(line)
+                and not line[:1].isspace()):
             section = None
         if section == "files":
             li = None if CHECKBOX_RE.match(line) else LIST_ITEM_RE.match(line)

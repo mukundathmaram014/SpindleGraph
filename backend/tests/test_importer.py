@@ -76,6 +76,39 @@ def test_parse_messy_tolerant(repo):
     assert rec["decisions"] == []
 
 
+WRAPPED = """---
+title: Feature with wrapped affected-file bullets
+status: decided
+---
+
+# Feature with wrapped affected-file bullets
+
+## Affected files
+- `src/db.py` — add `repeat_days` column to `Model`: mirror the sibling,
+  touching `__init__` and `serialize` (continuation line, indented).
+- `src/app.py` — new startup migration
+  (`ALTER TABLE ...`), called from `create_app`. **Prod schema change.**
+- `tests/test_db.py` — new cases
+
+## Implementation notes
+Flush-left prose here must still end the section.
+- `src/should_not_be_captured.py` — this bullet is under a prose paragraph
+"""
+
+
+def test_parse_wrapped_bullets_keeps_all_files(repo):
+    """A bullet whose text wraps onto an indented second line must not end the
+    Affected files section — every later bullet was being dropped, so the
+    conflict graph saw ~1 file per spec and scheduled conflicting specs together."""
+    p = repo / "specs" / "0031-wrapped-bullets.md"
+    p.write_text(WRAPPED, encoding="utf-8")
+    rec = importer.parse_spec_file(p, repo)
+    paths = {f["path"] for f in rec["files_planned"]}
+    assert paths == {"src/db.py", "src/app.py", "tests/test_db.py"}
+    # code spans inside a continuation line (`__init__`, `serialize`) are not files
+    assert "src/should_not_be_captured.py" not in paths  # after flush-left prose
+
+
 def test_non_spec_filename_ignored(repo):
     p = repo / "specs" / "README.md"
     p.write_text("# not a spec", encoding="utf-8")
