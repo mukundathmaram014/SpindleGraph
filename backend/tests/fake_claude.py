@@ -184,6 +184,12 @@ def main():
             "- **Involvement:** Minimal — one config file\n"
             "- **Review attention:** Low — no behavior change\n",
             encoding="utf-8")
+        # a compliant /spec agent COMMITS the file (see commands/spec.md) so the
+        # build worktree, branched off the default branch, can see it.
+        if not os.environ.get("FAKE_CLAUDE_NO_COMMIT"):
+            subprocess.run(["git", "add", str(f)], check=True)
+            subprocess.run(["git", "commit", "-q", "-m", f"spec-{n:04d}: generated"],
+                           check=True)
         emit({"type": "result", "is_error": False, "result": f"Wrote {f}",
               "usage": {"input_tokens": 100, "output_tokens": 50},
               "total_cost_usd": 0.05})

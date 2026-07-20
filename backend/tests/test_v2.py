@@ -584,6 +584,22 @@ def test_parallel_spec_jobs_get_distinct_numbers(client, git_repo):
     assert len(after - before) == 4  # four new specs actually landed
 
 
+def test_spec_job_that_never_commits_fails_instead_of_phantom(client, git_repo, monkeypatch):
+    """A /spec agent that writes the file but never commits it produces a spec
+    the importer can see but /build (a fresh worktree off the default branch)
+    cannot. The job must fail loudly rather than import an unbuildable phantom."""
+    monkeypatch.setenv("FAKE_CLAUDE_NO_COMMIT", "1")
+    proj = add_project(client, git_repo)
+    before = {s["number"] for s in client.get(f"/api/projects/{proj['id']}/specs").json()}
+    job = client.post("/api/jobs", json={"project_id": proj["id"], "kind": "spec",
+                                         "idea": "uncommitted idea"}).json()
+    j = wait_job(client, job["id"])
+    assert j["status"] == "failed"
+    assert "never committed" in (j["error"] or "")
+    after = {s["number"] for s in client.get(f"/api/projects/{proj['id']}/specs").json()}
+    assert after == before  # no phantom spec landed
+
+
 def test_parse_triage_candidates_takes_last_valid_block():
     from spindlegraph.api.routes import parse_triage_candidates
     text = (

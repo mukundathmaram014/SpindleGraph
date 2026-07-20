@@ -463,12 +463,46 @@ class JobManager:
         self._pub_job(conn, job_id, project_id)
         return success
 
+    def _uncommitted_spec_files(self, repo: Path) -> list[str]:
+        """Spec files under specs/ that git hasn't committed (untracked, staged,
+        or modified). A /build worktree branches off the default branch and only
+        sees committed history, so an uncommitted spec is a phantom: the importer
+        shows it (it reads the working tree) but the build can't find it."""
+        code, out = wt.run_git(["status", "--porcelain", "--", "specs"], repo)
+        if code != 0:
+            return []
+        files = []
+        for line in out.splitlines():
+            path = line[3:].strip()  # porcelain: "XY <path>"
+            if " -> " in path:  # rename: "orig -> new"
+                path = path.split(" -> ", 1)[1]
+            name = path.rsplit("/", 1)[-1]
+            if path.startswith("specs/") and re.match(r"\d{4}-.+\.md$", name):
+                files.append(path)
+        return files
+
     async def _run_simple(self, conn: sqlite3.Connection, job: dict, proj: dict) -> None:
         """triage / spec / scaffold: run in the repo, re-import on success."""
         repo = Path(proj["repo_path"])
         wt.ensure_commands(repo)
         executor = self._executor_row(conn, job["executor_id"])
         success = await self._exec(conn, job, repo, executor)
+        if success and job["kind"] == "spec":
+            # The /spec agent must COMMIT the spec, not just write it — otherwise
+            # /build (a fresh worktree off the default branch) can't see it and
+            # fails with "the spec file does not exist". Fail loudly here instead
+            # of importing a phantom spec that can never be built.
+            uncommitted = self._uncommitted_spec_files(repo)
+            if uncommitted:
+                success = False
+                conn.execute(
+                    "UPDATE job SET status='failed', error=? WHERE id=?",
+                    (f"the /spec agent wrote {', '.join(uncommitted)} but never "
+                     f"committed it; /build runs from a fresh worktree off "
+                     f"'{proj['default_branch']}' and only sees committed history. "
+                     "Re-run once the spec command commits the file.", job["id"]))
+                conn.commit()
+                self._pub_job(conn, job["id"], proj["id"])
         if success:
             importer.import_project(conn, proj["id"])
             bus.publish(proj["id"], {"type": "graph.updated"})

@@ -44,6 +44,15 @@ You are writing a **spec**, not implementing anything. Follow this process:
    follow, tests to add.
    ```
 
+4. **Commit the spec.** Stage only the file you wrote and commit it:
+   `git add specs/NNNN-<slug>.md` then `git commit -m "spec-NNNN: <slug>"`.
+   This is REQUIRED, not optional: SpindleGraph's `/build` runs from a fresh
+   worktree branched off the default branch, which only sees committed
+   history. An uncommitted spec file is a phantom — the importer shows it
+   (it reads the working tree) but the build worktree can't see it, so the
+   build fails with "the spec file does not exist." Stage ONLY your spec file;
+   do not `git add` unrelated working-tree changes.
+
 Rules:
 - **Affected files must be real, specific repo-relative paths** you verified
   (or explicitly new files). This list drives conflict detection between
