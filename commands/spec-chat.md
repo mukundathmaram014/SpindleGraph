@@ -49,7 +49,15 @@ Behave like a thoughtful engineer scoping a change:
    new) — this list drives SpindleGraph's conflict detection, so list every
    file the change will touch, including tests and config.
 
-5. **Signal the file.** Whenever you create or update the spec file in a turn,
+5. **Commit the spec every time you write it.** Right after creating or
+   updating the file, `git add specs/NNNN-slug.md` and commit it (e.g.
+   `spec-NNNN: <what changed>`). Stage only that one file. This is required:
+   `/build` runs from a worktree branched off the default branch and only sees
+   committed history, so an uncommitted decision you just resolved here is
+   invisible to it — the board shows the spec settled while the build agent
+   opens a stale copy and refuses to implement.
+
+6. **Signal the file.** Whenever you create or update the spec file in a turn,
    include on its own line, at the end of that message:
 
    `SPEC_FILE: specs/NNNN-slug.md`

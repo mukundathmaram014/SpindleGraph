@@ -702,6 +702,27 @@ async def create_job(body: JobCreate):
                 raise HTTPException(
                     409, f"spec has {len(unresolved)} unresolved decision(s) — "
                     "resolve them in the spec file (or the drawer) and rebuild")
+            # The gate above read the WORKING TREE, but the agent reads the spec
+            # from a worktree cut off default_branch. Spec-chat rewrites, drawer
+            # edits and hand edits all land on disk uncommitted, so the two can
+            # disagree: the gate sees resolved decisions while the agent opens a
+            # stale copy with open ones and refuses to build. Commit the spec so
+            # the branch carries exactly what we just gated on.
+            repo_path = Path(proj["repo_path"])
+            if not wt.file_matches_branch(repo_path, spec["file_path"],
+                                          proj["default_branch"]):
+                wt.commit_file_if_dirty(
+                    repo_path, spec["file_path"],
+                    f"spec-{spec['number']:04d}: sync spec before build")
+                if not wt.file_matches_branch(repo_path, spec["file_path"],
+                                              proj["default_branch"]):
+                    raise HTTPException(
+                        409,
+                        f"{spec['file_path']} does not match "
+                        f"'{proj['default_branch']}' and could not be committed "
+                        "there — the build branches off that branch and would "
+                        "read a stale spec. Commit the spec file (is the repo on "
+                        f"'{proj['default_branch']}'?) and rebuild")
             job = manager.create_job(
                 conn, proj["id"], "build", [spec["id"]],
                 executor_id=body.executor_id or spec["executor_id"]

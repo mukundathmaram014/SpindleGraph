@@ -98,6 +98,41 @@ def spec_by_number(client, pid, number) -> dict:
     return next(s for s in specs if s["number"] == number)
 
 
+def test_build_commits_spec_resolved_only_on_disk(client, git_repo):
+    """Resolving decisions via spec-chat or the drawer rewrites the spec file but
+    never commits it. /build cuts a worktree off the default branch, so the
+    resolution is invisible there: the decision gate (working tree) passes while
+    the agent opens a stale copy with open decisions and refuses to implement."""
+    proj = add_project(client, git_repo)
+    s7 = spec_by_number(client, proj["id"], 7)
+    body = {"project_id": proj["id"], "kind": "build", "spec_ids": [s7["id"]]}
+
+    # as committed, 0007 still has an open decision -> gated
+    r = client.post("/api/jobs", json=body)
+    assert r.status_code == 409 and "unresolved decision" in r.text
+
+    # resolve it on disk only, leaving it uncommitted (spec-chat / drawer behavior)
+    resolved = (SPEC_7.replace("status: draft", "status: decided")
+                .replace("- [ ] Counter store: redis or in-memory?",
+                         "- [x] Counter store: redis or in-memory? → redis"))
+    (git_repo / "specs" / "0007-add-rate-limiting.md").write_text(
+        resolved, encoding="utf-8")
+    dirty = subprocess.run(["git", "status", "--porcelain", "--", "specs"],
+                           cwd=git_repo, capture_output=True, text=True).stdout
+    assert dirty.strip(), "precondition: the spec edit is uncommitted"
+
+    r = client.post("/api/jobs", json=body)
+    assert r.status_code == 200, r.text
+
+    # the branch the worktree is cut from must now carry the resolved spec
+    on_branch = subprocess.run(
+        ["git", "show", "main:specs/0007-add-rate-limiting.md"],
+        cwd=git_repo, capture_output=True, text=True).stdout
+    assert "- [x] Counter store" in on_branch
+    assert "status: decided" in on_branch
+    wait_job(client, r.json()["id"])
+
+
 def test_project_import_and_graph(client, git_repo):
     proj = add_project(client, git_repo)
     g = client.get(f"/api/projects/{proj['id']}/graph").json()

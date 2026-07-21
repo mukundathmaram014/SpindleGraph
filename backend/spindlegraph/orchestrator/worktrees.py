@@ -82,6 +82,37 @@ def branch_head(repo: Path, branch: str) -> str | None:
     return out.strip() if code == 0 and out.strip() else None
 
 
+def file_matches_branch(repo: Path, rel_path: str, branch: str) -> bool:
+    """True if ``rel_path`` on disk is identical to what ``branch`` has committed.
+
+    A build worktree is cut from ``branch``, so anything living only in the
+    working tree is invisible to the agent running in it.
+    """
+    code, _ = run_git(["diff", "--quiet", branch, "--", rel_path], repo)
+    if code != 0:
+        return False
+    # `git diff` is blind to untracked paths, so a never-committed spec looks
+    # "clean" above — confirm the branch actually carries the file.
+    code, _ = run_git(["cat-file", "-e", f"{branch}:{rel_path}"], repo)
+    return code == 0
+
+
+def commit_file_if_dirty(repo: Path, rel_path: str, message: str) -> tuple[bool, str]:
+    """Stage + commit a single file if it differs from HEAD. Returns (committed, note)."""
+    code, out = run_git(["status", "--porcelain", "--", rel_path], repo)
+    if code != 0:
+        return False, f"git status failed: {out}"
+    if not out.strip():
+        return False, "nothing to commit"
+    code, out = run_git(["add", "--", rel_path], repo)
+    if code != 0:
+        return False, f"git add failed: {out}"
+    code, out = run_git(["commit", "-m", message, "--", rel_path], repo)
+    if code != 0:
+        return False, f"git commit failed: {out}"
+    return True, "committed"
+
+
 def run_gh(args: list[str], cwd: Path) -> tuple[int, str]:
     try:
         p = subprocess.run(["gh", *args], cwd=str(cwd), capture_output=True,
