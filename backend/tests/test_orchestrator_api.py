@@ -223,6 +223,42 @@ def test_retry_auto_resumes_dirty_failed_worktree(client, git_repo, monkeypatch)
     assert s9["status"] == "built"
 
 
+def test_retry_recuts_worktree_dirty_only_with_generated_commands(
+        client, git_repo, monkeypatch):
+    """ensure_commands copies .claude/commands/*.md into every worktree, so a
+    failed build leaves one 'dirty' having done nothing. Treating that as agent
+    progress pinned the branch to its original base, so rebuilding after fixing
+    the spec re-read the stale copy and failed the same way forever."""
+    monkeypatch.setenv("FAKE_CLAUDE_FAIL", "1")
+    proj = add_project(client, git_repo)
+    s9 = spec_by_number(client, proj["id"], 9)
+    body = {"project_id": proj["id"], "kind": "build", "spec_ids": [s9["id"]]}
+    first = wait_job(client, client.post("/api/jobs", json=body).json()["id"])
+    assert first["status"] == "failed"
+
+    porcelain = subprocess.run(["git", "status", "--porcelain", "-uall"],
+                               cwd=first["worktree_path"],
+                               capture_output=True, text=True).stdout
+    assert porcelain.strip(), "expected the copied commands to dirty the worktree"
+    assert all(".claude/commands/" in ln for ln in porcelain.strip().splitlines()), \
+        f"fixture should be dirty only with generated commands: {porcelain!r}"
+
+    # the spec is fixed on the default branch after that failure
+    (git_repo / "specs" / "0009-fix-login-redirect.md").write_text(
+        SPEC_9 + "\n## Implementation notes\nfixed upstream\n", encoding="utf-8")
+    subprocess.run(["git", "commit", "-qam", "fix spec 0009"], cwd=git_repo, check=True)
+    fixed = subprocess.run(["git", "rev-parse", "HEAD"], cwd=git_repo,
+                           capture_output=True, text=True).stdout.strip()
+
+    monkeypatch.delenv("FAKE_CLAUDE_FAIL", raising=False)
+    second = wait_job(client, client.post("/api/jobs", json=body).json()["id"])
+    assert second["status"] == "succeeded", second
+    # the rebuild must be cut from the fixed base, not resumed on the stale branch
+    rc = subprocess.run(["git", "merge-base", "--is-ancestor", fixed,
+                         second["branch"]], cwd=git_repo).returncode
+    assert rc == 0, "rebuild did not pick up the spec fix from the base branch"
+
+
 def test_lock_denied_build_auto_finalizes_on_host(client, git_repo, monkeypatch):
     monkeypatch.setenv("FAKE_CLAUDE_LOCK_DENIED", "1")
     proj = add_project(client, git_repo)

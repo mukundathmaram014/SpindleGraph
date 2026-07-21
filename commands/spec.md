@@ -44,14 +44,21 @@ You are writing a **spec**, not implementing anything. Follow this process:
    follow, tests to add.
    ```
 
-4. **Commit the spec.** Stage only the file you wrote and commit it:
-   `git add specs/NNNN-<slug>.md` then `git commit -m "spec-NNNN: <slug>"`.
+4. **Commit the spec — scoped to your file only.** Run
+   `git add -- specs/NNNN-<slug>.md` then
+   `git commit -m "spec-NNNN: <slug>" -- specs/NNNN-<slug>.md`.
    This is REQUIRED, not optional: SpindleGraph's `/build` runs from a fresh
    worktree branched off the default branch, which only sees committed
    history. An uncommitted spec file is a phantom — the importer shows it
    (it reads the working tree) but the build worktree can't see it, so the
-   build fails with "the spec file does not exist." Stage ONLY your spec file;
-   do not `git add` unrelated working-tree changes.
+   build fails with "the spec file does not exist."
+
+   The trailing `-- <path>` pathspec matters: several `/spec` jobs are often
+   fanned out against this same checkout at once. A bare `git commit` would
+   sweep in whatever a sibling job just staged and leave that job nothing to
+   commit. For the same reason, if git reports the index is locked
+   (`index.lock`), wait a moment and retry rather than giving up — a sibling
+   is mid-commit. Never `git add -A`, and never stage another job's files.
 
 Rules:
 - **Affected files must be real, specific repo-relative paths** you verified

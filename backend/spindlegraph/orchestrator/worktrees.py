@@ -14,6 +14,10 @@ from .. import config
 BUNDLED_COMMANDS = Path(__file__).resolve().parents[3] / "commands"
 
 
+# files SpindleGraph itself copies into every worktree (see ensure_commands)
+GENERATED_RE = re.compile(r"^\.claude/commands/[^/]+\.md$")
+
+
 def run_git(args: list[str], cwd: Path) -> tuple[int, str]:
     p = subprocess.run(["git", *args], cwd=str(cwd), capture_output=True,
                        text=True, encoding="utf-8", errors="replace")
@@ -31,6 +35,26 @@ def worktree_path(project_slug: str, spec_key: str) -> Path:
     return config.state_dir() / "worktrees" / project_slug / spec_key
 
 
+def agent_changes(porcelain: str) -> list[str]:
+    """Paths from ``git status --porcelain`` the agent actually touched.
+
+    ``ensure_commands`` copies bundled commands into every worktree, so a
+    worktree that has done nothing still reports `.claude/commands/*.md` as
+    dirty. Counting those as progress pins the worktree to its original base
+    forever: a rebuild resumes the stale branch instead of re-cutting from the
+    (fixed) base, so the agent keeps reading the spec as it was.
+    """
+    paths = []
+    for line in porcelain.splitlines():
+        p = line[3:].strip()
+        if " -> " in p:  # rename: "orig -> new"
+            p = p.split(" -> ", 1)[1]
+        p = p.strip('"')
+        if p and not GENERATED_RE.match(p):
+            paths.append(p)
+    return paths
+
+
 def create_worktree(repo: Path, project_slug: str, spec_key: str,
                     base_branch: str) -> tuple[Path, str]:
     """Create (or reuse) a worktree on branch spec/<spec_key>."""
@@ -40,8 +64,10 @@ def create_worktree(repo: Path, project_slug: str, spec_key: str,
         # If a failed run left uncommitted edits behind, resume directly in the
         # same worktree instead of forcing manual cleanup. This preserves agent
         # progress across reruns (e.g. spend-limit interruptions).
-        code, out = run_git(["status", "--porcelain"], path)
-        if code == 0 and out.strip():
+        # -uall: without it git collapses an untracked dir to ".claude/", which
+        # would hide whether the only changes are the commands we copied in
+        code, out = run_git(["status", "--porcelain", "-uall"], path)
+        if code == 0 and agent_changes(out):
             code_b, out_b = run_git(["symbolic-ref", "--short", "HEAD"], path)
             if code_b == 0 and out_b.strip() and out_b.strip() != branch:
                 # best effort: switch to the spec branch before resuming
@@ -51,7 +77,15 @@ def create_worktree(repo: Path, project_slug: str, spec_key: str,
     path.parent.mkdir(parents=True, exist_ok=True)
     code, out = run_git(["worktree", "add", "-b", branch, str(path), base_branch], repo)
     if code != 0 and "already exists" in out:
-        # branch left over from a previous attempt — reuse it
+        # Branch left over from a previous attempt. If it carries no commits of
+        # its own it is just a stale pointer at an older base — re-point it at
+        # the current base, otherwise the rebuild silently reads the spec (and
+        # the rest of the tree) exactly as it was when that attempt started.
+        # A branch WITH commits is real work: reuse it untouched.
+        code_c, out_c = run_git(
+            ["rev-list", "--count", f"{base_branch}..{branch}"], repo)
+        if code_c == 0 and out_c.strip() == "0":
+            run_git(["branch", "-f", branch, base_branch], repo)
         code, out = run_git(["worktree", "add", str(path), branch], repo)
     if code != 0:
         raise RuntimeError(f"git worktree add failed: {out}")

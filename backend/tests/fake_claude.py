@@ -10,11 +10,33 @@ import os
 import re
 import subprocess
 import sys
+import time
 from pathlib import Path
 
 
 def emit(obj):
     print(json.dumps(obj), flush=True)
+
+
+def commit_one_file(path, message, attempts=10):
+    """Commit exactly `path`, the way a /spec agent must in a shared repo.
+
+    Triage fans out several /spec jobs against one checkout, so commits race:
+    a bare `git commit` sweeps in whatever a sibling just staged (leaving that
+    sibling nothing to commit), and git's index.lock makes concurrent attempts
+    fail outright. Scope the commit with a pathspec and retry through the lock.
+    """
+    last = ""
+    for i in range(attempts):
+        subprocess.run(["git", "add", "--", str(path)],
+                       capture_output=True, text=True)
+        p = subprocess.run(["git", "commit", "-q", "-m", message, "--", str(path)],
+                           capture_output=True, text=True)
+        if p.returncode == 0:
+            return
+        last = (p.stdout or "") + (p.stderr or "")
+        time.sleep(0.1 * (i + 1))
+    raise RuntimeError(f"could not commit {path}: {last}")
 
 
 def main():
@@ -187,9 +209,7 @@ def main():
         # a compliant /spec agent COMMITS the file (see commands/spec.md) so the
         # build worktree, branched off the default branch, can see it.
         if not os.environ.get("FAKE_CLAUDE_NO_COMMIT"):
-            subprocess.run(["git", "add", str(f)], check=True)
-            subprocess.run(["git", "commit", "-q", "-m", f"spec-{n:04d}: generated"],
-                           check=True)
+            commit_one_file(f, f"spec-{n:04d}: generated")
         emit({"type": "result", "is_error": False, "result": f"Wrote {f}",
               "usage": {"input_tokens": 100, "output_tokens": 50},
               "total_cost_usd": 0.05})

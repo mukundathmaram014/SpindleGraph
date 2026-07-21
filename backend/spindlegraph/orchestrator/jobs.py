@@ -463,21 +463,30 @@ class JobManager:
         self._pub_job(conn, job_id, project_id)
         return success
 
-    def _uncommitted_spec_files(self, repo: Path) -> list[str]:
+    def _uncommitted_spec_files(self, repo: Path,
+                                number: int | None = None) -> list[str]:
         """Spec files under specs/ that git hasn't committed (untracked, staged,
         or modified). A /build worktree branches off the default branch and only
         sees committed history, so an uncommitted spec is a phantom: the importer
-        shows it (it reads the working tree) but the build can't find it."""
+        shows it (it reads the working tree) but the build can't find it.
+
+        Pass ``number`` to consider only that spec. Triage fans out several
+        /spec jobs against one checkout, so a job that looked at all of specs/
+        would fail itself over a sibling's file that is merely still in flight.
+        """
         code, out = wt.run_git(["status", "--porcelain", "--", "specs"], repo)
         if code != 0:
             return []
+        prefix = None if number is None else f"{number:04d}-"
         files = []
         for line in out.splitlines():
             path = line[3:].strip()  # porcelain: "XY <path>"
             if " -> " in path:  # rename: "orig -> new"
                 path = path.split(" -> ", 1)[1]
             name = path.rsplit("/", 1)[-1]
-            if path.startswith("specs/") and re.match(r"\d{4}-.+\.md$", name):
+            if not (path.startswith("specs/") and re.match(r"\d{4}-.+\.md$", name)):
+                continue
+            if prefix is None or name.startswith(prefix):
                 files.append(path)
         return files
 
@@ -492,7 +501,8 @@ class JobManager:
             # /build (a fresh worktree off the default branch) can't see it and
             # fails with "the spec file does not exist". Fail loudly here instead
             # of importing a phantom spec that can never be built.
-            uncommitted = self._uncommitted_spec_files(repo)
+            res = self._reserved_of.get(job["id"])
+            uncommitted = self._uncommitted_spec_files(repo, res[1] if res else None)
             if uncommitted:
                 success = False
                 conn.execute(
